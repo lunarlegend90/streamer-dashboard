@@ -48,7 +48,20 @@ const [channelUrl, setChannelUrl] = useState("");
 
  const refreshStatus = async () => {
   setMsg("جاري تحديث الحالات...");
-  const res = await fetch("/api/refresh-status", { method: "POST" });
+
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
+
+  if (!token) {
+    setMsg("لا يوجد تسجيل دخول. ارجع لصفحة login.");
+    return;
+  }
+
+  const res = await fetch("/api/refresh-status", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
   const data = await res.json();
   setMsg(data.ok ? `✅ تم تحديث الحالات (${data.updated}/${data.checked})` : `خطأ: ${data.error}`);
   load();
@@ -107,6 +120,9 @@ const [channelUrl, setChannelUrl] = useState("");
 
       <p>Logged in as: <b>{email || "..."}</b></p>
       <p>{msg}</p>
+      <div style={{ marginTop: 10, padding: 10, border: "1px solid #555", borderRadius: 8 }}>
+  {msg || "—"}
+</div>
 
       <div style={{ border: "1px solid #333", borderRadius: 12, padding: 12, marginTop: 16 }}>
   <h2>Add Streamer</h2>
@@ -156,7 +172,7 @@ const [channelUrl, setChannelUrl] = useState("");
     <button onClick={addStreamer} style={{ padding: 12 }}>
       Add
     </button>
-    
+
     <button onClick={refreshStatus} style={{ padding: 10, marginTop: 10 }}>
   Refresh Status
 </button>
