@@ -19,20 +19,21 @@ type KickChannelResponse = {
 };
 
 async function checkKick(username: string) {
-  // Endpoint شائع الاستخدام للحصول على بيانات القناة
   const url = `https://kick.com/api/v2/channels/${encodeURIComponent(username)}`;
 
   const res = await fetch(url, {
-    // بعض السيرفرات تتشدد بدون User-Agent
     headers: { "User-Agent": "Mozilla/5.0 (CronBot)" },
     cache: "no-store",
   });
 
+  // ✅ رجّع لنا كود الاستجابة عشان نعرف هل Kick حاجب؟
+  const http = res.status;
+
   if (!res.ok) {
-    return { status: "unknown" as const, title: null, category: null, viewers: null };
+    return { status: "unknown" as const, title: null, category: null, viewers: null, http };
   }
 
-  const json = (await res.json()) as KickChannelResponse;
+  const json = (await res.json()) as any;
 
   const isLive = Boolean(json?.is_live);
   const title = json?.livestream?.session_title ?? null;
@@ -44,6 +45,7 @@ async function checkKick(username: string) {
     title,
     category,
     viewers,
+    http,
   };
 }
 
@@ -68,6 +70,7 @@ export async function GET(req: Request) {
 
   let checked = 0;
   let updated = 0;
+  const debug: any[] = [];
 
   for (const s of streamers ?? []) {
     checked++;
@@ -78,6 +81,12 @@ export async function GET(req: Request) {
     if ((s.platform ?? "").toLowerCase() === "kick") {
       result = await checkKick(s.username);
     }
+
+    debug.push({
+  username: s.username,
+  platform: s.platform,
+  result,
+});
 
     const nowIso = new Date().toISOString();
 
@@ -106,5 +115,5 @@ export async function GET(req: Request) {
     });
   }
 
-  return NextResponse.json({ ok: true, checked, updated });
+  return NextResponse.json({ ok: true, checked, updated, debug });
 }
