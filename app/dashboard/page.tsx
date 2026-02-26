@@ -40,6 +40,10 @@ export default function DashboardPage() {
   const [pending, setPending] = useState<PendingNotif[]>([]);
   const [statusFilter, setStatusFilter] = useState<"all" | "online" | "offline" | "unknown">("all");
 
+  // Auto-open settings
+  const [autoOpenEnabled, setAutoOpenEnabled] = useState<boolean>(true);
+  const [cooldownMinutes, setCooldownMinutes] = useState<number>(30);
+
   const normalizeStatus = (s: string) => (s ?? "unknown").toLowerCase();
   const statusRank: Record<string, number> = { online: 0, offline: 1, unknown: 2 };
 
@@ -47,8 +51,7 @@ export default function DashboardPage() {
     if (!silent) setMsg("جاري تحميل البيانات...");
 
     const { data: userData } = await supabase.auth.getUser();
-    const userEmail = userData.user?.email ?? "";
-    setEmail(userEmail);
+    setEmail(userData.user?.email ?? "");
 
     const { data, error } = await supabase
       .from("streamers")
@@ -216,9 +219,61 @@ export default function DashboardPage() {
     window.location.href = "/login";
   };
 
+  // Auto-open settings API
+  const loadAutoOpenSettings = async () => {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+    if (!token) return;
+
+    const res = await fetch("/api/settings/auto-open", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const data = await res.json();
+
+    if (res.ok && data.ok) {
+      setAutoOpenEnabled(Boolean(data.auto_open_enabled));
+      setCooldownMinutes(Number(data.auto_open_cooldown_minutes ?? 0));
+    }
+  };
+
+  const saveAutoOpenSettings = async () => {
+    setMsg("جاري حفظ الإعدادات...");
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      setMsg("❌ لا يوجد تسجيل دخول.");
+      return;
+    }
+
+    const res = await fetch("/api/settings/auto-open", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        auto_open_enabled: autoOpenEnabled,
+        auto_open_cooldown_minutes: cooldownMinutes,
+      }),
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || !data.ok) {
+      setMsg(`❌ خطأ حفظ الإعدادات: ${data.error ?? res.status}`);
+      return;
+    }
+
+    setMsg("✅ تم حفظ الإعدادات");
+  };
+
   useEffect(() => {
     load();
     loadPending();
+    loadAutoOpenSettings();
 
     const t = setInterval(() => {
       loadPending();
@@ -254,6 +309,38 @@ export default function DashboardPage() {
 
       <div style={{ marginTop: 10, padding: 10, border: "1px solid #555", borderRadius: 8 }}>
         {msg || "—"}
+      </div>
+
+      {/* Auto-open settings */}
+      <div style={{ border: "1px solid #333", borderRadius: 12, padding: 12, marginTop: 16 }}>
+        <h2>Auto-Open Settings</h2>
+
+        <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={autoOpenEnabled}
+            onChange={(e) => setAutoOpenEnabled(e.target.checked)}
+          />
+          Enable Auto-Open notifications
+        </label>
+
+        <div style={{ marginTop: 10 }}>
+          <label>
+            Cooldown (minutes)
+            <input
+              type="number"
+              value={cooldownMinutes}
+              onChange={(e) => setCooldownMinutes(Number(e.target.value))}
+              style={{ width: "100%", padding: 10, marginTop: 4 }}
+              min={0}
+              max={1440}
+            />
+          </label>
+        </div>
+
+        <button onClick={saveAutoOpenSettings} style={{ padding: 10, marginTop: 12 }}>
+          Save Settings
+        </button>
       </div>
 
       {pending.length > 0 && (
