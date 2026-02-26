@@ -76,7 +76,7 @@ export async function GET(req: Request) {
     checked++;
 
     // حالياً نفحص Kick فقط. باقي المنصات نخليها unknown.
-    let result = { status: "unknown" as const, title: null as string | null, category: null as string | null, viewers: null as number | null };
+    let result: any = { status: "unknown", title: null, category: null, viewers: null, http: null };
 
     if ((s.platform ?? "").toLowerCase() === "kick") {
       result = await checkKick(s.username);
