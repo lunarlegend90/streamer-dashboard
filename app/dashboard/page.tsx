@@ -21,25 +21,26 @@ const [username, setUsername] = useState("");
 const [displayName, setDisplayName] = useState("");
 const [channelUrl, setChannelUrl] = useState("");
 
-  const load = async () => {
-    setMsg("جاري تحميل البيانات...");
-    const { data: userData } = await supabase.auth.getUser();
-    const userEmail = userData.user?.email ?? "";
-    setEmail(userEmail);
+  const load = async (silent = false) => {
+  if (!silent) setMsg("جاري تحميل البيانات...");
 
-    const { data, error } = await supabase
-      .from("streamers")
-      .select("id, platform, username, display_name, channel_url, last_status")
-      .order("created_at", { ascending: false });
+  const { data: userData } = await supabase.auth.getUser();
+  const userEmail = userData.user?.email ?? "";
+  setEmail(userEmail);
 
-    if (error) {
-      setMsg(`خطأ: ${error.message}`);
-      return;
-    }
+  const { data, error } = await supabase
+    .from("streamers")
+    .select("id, platform, username, display_name, channel_url, last_status")
+    .order("created_at", { ascending: false });
 
-    setStreamers((data as any) ?? []);
-    setMsg("✅ تم التحميل");
-  };
+  if (error) {
+    if (!silent) setMsg(`خطأ: ${error.message}`);
+    return;
+  }
+
+  setStreamers((data as any) ?? []);
+  if (!silent) setMsg("✅ تم التحميل");
+};
 
   const signOut = async () => {
     await supabase.auth.signOut();
@@ -64,7 +65,7 @@ const [channelUrl, setChannelUrl] = useState("");
 
   const data = await res.json();
   setMsg(data.ok ? `✅ تم تحديث الحالات (${data.updated}/${data.checked})` : `خطأ: ${data.error}`);
-  load();
+  load(true);
 };
 
   const addStreamer = async () => {
