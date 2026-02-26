@@ -9,6 +9,51 @@ function supabaseAdmin() {
   );
 }
 
+async function enqueueAutoOpenForAllUsers(admin: any, streamerId: string) {
+  // settings
+  const { data: settings } = await admin.from("system_settings").select("*").eq("id", 1).single();
+  if (!settings?.auto_open_enabled) return;
+
+  const cooldownMin = Number(settings.auto_open_cooldown_minutes ?? 0);
+
+  // all users
+  const { data: users } = await admin.from("profiles").select("id");
+  if (!users?.length) return;
+
+  const now = new Date();
+  const cutoffIso = new Date(now.getTime() - cooldownMin * 60 * 1000).toISOString();
+
+  for (const u of users) {
+    // cooldown check: did this user open this streamer recently?
+    const { data: recent } = await admin
+      .from("auto_open_events")
+      .select("id")
+      .eq("user_id", u.id)
+      .eq("streamer_id", streamerId)
+      .gte("opened_at", cutoffIso)
+      .limit(1);
+
+    if (recent && recent.length > 0) continue;
+
+    // avoid duplicate pending notifications
+    const { data: pending } = await admin
+      .from("open_notifications")
+      .select("id")
+      .eq("user_id", u.id)
+      .eq("streamer_id", streamerId)
+      .eq("status", "pending")
+      .limit(1);
+
+    if (pending && pending.length > 0) continue;
+
+    await admin.from("open_notifications").insert({
+      user_id: u.id,
+      streamer_id: streamerId,
+      status: "pending",
+    });
+  }
+}
+
 // تحقق تسجيل الدخول: لازم يرسل Authorization: Bearer <access_token>
 async function requireAuth(req: Request) {
   const auth = req.headers.get("authorization") || "";
@@ -60,38 +105,47 @@ export async function POST(req: Request) {
   let updated = 0;
 
   for (const s of streamers ?? []) {
-    checked++;
+  checked++;
 
-    let result = { status: "unknown", title: null, category: null, viewers: null };
+  const before = (s.last_status ?? "unknown").toLowerCase();
 
-    if ((s.platform ?? "").toLowerCase() === "kick") {
-      result = await checkKick(s.username);
-    }
+  let result: any = { status: "unknown", title: null, category: null, viewers: null };
 
-    const nowIso = new Date().toISOString();
+  const p = (s.platform ?? "").toLowerCase();
+  if (p === "kick") result = await checkKick(s.username);
+  // (لو عندك checkTwitch هنا وتبي auto-open للتويتش بعدين، نضيفها لاحقًا)
 
-    const { error: uErr } = await admin
-      .from("streamers")
-      .update({
-        last_status: result.status,
-        last_checked_at: nowIso,
-        last_live_title: result.title,
-        last_category: result.category,
-        last_viewer_count: result.viewers,
-      })
-      .eq("id", s.id);
+  const after = (result.status ?? "unknown").toLowerCase();
 
-    if (!uErr) updated++;
-
-    await admin.from("streamer_status_logs").insert({
-      streamer_id: s.id,
-      status: result.status,
-      viewer_count: result.viewers,
-      title: result.title,
-      category: result.category,
-      checked_at: nowIso,
-    });
+  // ✅ Auto-open trigger
+  if (before !== "online" && after === "online") {
+    await enqueueAutoOpenForAllUsers(admin, s.id);
   }
+
+  const nowIso = new Date().toISOString();
+
+  const { error: uErr } = await admin
+    .from("streamers")
+    .update({
+      last_status: result.status,
+      last_checked_at: nowIso,
+      last_live_title: result.title,
+      last_category: result.category,
+      last_viewer_count: result.viewers,
+    })
+    .eq("id", s.id);
+
+  if (!uErr) updated++;
+
+  await admin.from("streamer_status_logs").insert({
+    streamer_id: s.id,
+    status: result.status,
+    viewer_count: result.viewers,
+    title: result.title,
+    category: result.category,
+    checked_at: nowIso,
+  });
+}
 
   return NextResponse.json({ ok: true, checked, updated });
 }
