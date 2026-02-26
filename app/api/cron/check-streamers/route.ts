@@ -115,5 +115,5 @@ export async function GET(req: Request) {
     });
   }
 
-  return NextResponse.json({ ok: true, version: "kick-v2", checked, updated, debug });
+  return NextResponse.json({ ok: true, checked, updated });
 }
