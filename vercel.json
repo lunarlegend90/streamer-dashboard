@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/check-streamers?secret=${CRON_SECRET}",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 9 * * *"
     }
   ]
 }
