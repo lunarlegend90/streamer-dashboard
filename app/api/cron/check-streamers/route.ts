@@ -80,7 +80,7 @@ async function checkKick(username: string) {
 
   const json = (await res.json()) as any;
 
-  const isLive = Boolean(json?.is_live);
+  const isLive = Boolean(json?.livestream?.is_live);
   const title = json?.livestream?.session_title ?? null;
   const viewers = json?.livestream?.viewers ?? null;
   const category = json?.livestream?.categories?.[0]?.name ?? null;

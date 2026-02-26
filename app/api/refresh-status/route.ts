@@ -77,7 +77,7 @@ async function checkKick(username: string) {
   if (!res.ok) return { status: "unknown", title: null, category: null, viewers: null };
 
   const json: any = await res.json();
-  const isLive = Boolean(json?.is_live);
+  const isLive = Boolean(json?.livestream?.is_live);
   return {
     status: isLive ? "online" : "offline",
     title: json?.livestream?.session_title ?? null,
