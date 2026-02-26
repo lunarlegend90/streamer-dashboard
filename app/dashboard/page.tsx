@@ -45,6 +45,15 @@ const [channelUrl, setChannelUrl] = useState("");
     await supabase.auth.signOut();
     window.location.href = "/login";
   };
+
+ const refreshStatus = async () => {
+  setMsg("جاري تحديث الحالات...");
+  const res = await fetch("/api/refresh-status", { method: "POST" });
+  const data = await res.json();
+  setMsg(data.ok ? `✅ تم تحديث الحالات (${data.updated}/${data.checked})` : `خطأ: ${data.error}`);
+  load();
+};
+
   const addStreamer = async () => {
   setMsg("جاري الإضافة...");
   if (!username.trim() || !channelUrl.trim()) {
