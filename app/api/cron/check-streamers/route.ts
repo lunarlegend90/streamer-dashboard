@@ -30,7 +30,7 @@ async function checkKick(username: string) {
   const http = res.status;
 
   if (!res.ok) {
-    return { status: "unknown" as const, title: null, category: null, viewers: null, http };
+    return { status: "unknown", title: null, category: null, viewers: null, http };
   }
 
   const json = (await res.json()) as any;
@@ -41,7 +41,7 @@ async function checkKick(username: string) {
   const category = json?.livestream?.categories?.[0]?.name ?? null;
 
   return {
-    status: (isLive ? "online" : "offline") as const,
+    status: isLive ? "online" : "offline",
     title,
     category,
     viewers,
