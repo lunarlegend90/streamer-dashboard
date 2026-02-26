@@ -9,6 +9,20 @@ function supabaseAdmin() {
   );
 }
 
+// تحقق تسجيل الدخول: لازم يرسل Authorization: Bearer <access_token>
+async function requireAuth(req: Request) {
+  const auth = req.headers.get("authorization") || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+  if (!token) return null;
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const anon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+  const client = createClient(url, anon, { auth: { persistSession: false } });
+
+  const { data } = await client.auth.getUser(token);
+  return data.user ?? null;
+}
+
 async function checkKick(username: string) {
   const url = `https://kick.com/api/v2/channels/${encodeURIComponent(username)}`;
   const res = await fetch(url, {
@@ -27,8 +41,12 @@ async function checkKick(username: string) {
   };
 }
 
-// POST عشان ما ينفتح بالمتصفح بسهولة
-export async function POST() {
+export async function POST(req: Request) {
+  const user = await requireAuth(req);
+  if (!user) {
+    return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
+  }
+
   const admin = supabaseAdmin();
 
   const { data: streamers, error: sErr } = await admin
