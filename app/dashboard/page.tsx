@@ -12,6 +12,21 @@ type Streamer = {
   last_status: string;
 };
 
+type PendingNotif = {
+  id: number;
+  streamer_id: string;
+  created_at: string;
+  status: "pending" | "opened" | "dismissed";
+  streamers: {
+    id: string;
+    platform: string;
+    username: string;
+    display_name: string | null;
+    channel_url: string;
+    last_status: string;
+  };
+};
+
 export default function DashboardPage() {
   const [email, setEmail] = useState<string>("");
   const [streamers, setStreamers] = useState<Streamer[]>([]);
