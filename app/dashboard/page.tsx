@@ -151,9 +151,15 @@ const [channelUrl, setChannelUrl] = useState("");
       />
     </label>
 
+  
+
     <button onClick={addStreamer} style={{ padding: 12 }}>
       Add
     </button>
+    
+    <button onClick={refreshStatus} style={{ padding: 10, marginTop: 10 }}>
+  Refresh Status
+</button>
   </div>
 </div>
       <h2>Streamers</h2>
