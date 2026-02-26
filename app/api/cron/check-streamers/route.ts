@@ -9,6 +9,44 @@ function supabaseAdmin() {
   );
 }
 
+type KickChannelResponse = {
+  is_live?: boolean;
+  livestream?: {
+    session_title?: string | null;
+    viewers?: number | null;
+    categories?: Array<{ name?: string | null }> | null;
+  } | null;
+};
+
+async function checkKick(username: string) {
+  // Endpoint شائع الاستخدام للحصول على بيانات القناة
+  const url = `https://kick.com/api/v2/channels/${encodeURIComponent(username)}`;
+
+  const res = await fetch(url, {
+    // بعض السيرفرات تتشدد بدون User-Agent
+    headers: { "User-Agent": "Mozilla/5.0 (CronBot)" },
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    return { status: "unknown" as const, title: null, category: null, viewers: null };
+  }
+
+  const json = (await res.json()) as KickChannelResponse;
+
+  const isLive = Boolean(json?.is_live);
+  const title = json?.livestream?.session_title ?? null;
+  const viewers = json?.livestream?.viewers ?? null;
+  const category = json?.livestream?.categories?.[0]?.name ?? null;
+
+  return {
+    status: (isLive ? "online" : "offline") as const,
+    title,
+    category,
+    viewers,
+  };
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const secret = url.searchParams.get("secret");
@@ -28,15 +66,31 @@ export async function GET(req: Request) {
     return NextResponse.json({ ok: false, error: sErr.message }, { status: 500 });
   }
 
+  let checked = 0;
   let updated = 0;
 
   for (const s of streamers ?? []) {
-    // مؤقت: نخلي الحالة unknown ونحدث وقت الفحص
+    checked++;
+
+    // حالياً نفحص Kick فقط. باقي المنصات نخليها unknown.
+    let result = { status: "unknown" as const, title: null as string | null, category: null as string | null, viewers: null as number | null };
+
+    if ((s.platform ?? "").toLowerCase() === "kick") {
+      result = await checkKick(s.username);
+    }
+
     const nowIso = new Date().toISOString();
 
+    // تحديث جدول streamers
     const { error: uErr } = await admin
       .from("streamers")
-      .update({ last_checked_at: nowIso })
+      .update({
+        last_status: result.status,
+        last_checked_at: nowIso,
+        last_live_title: result.title,
+        last_category: result.category,
+        last_viewer_count: result.viewers,
+      })
       .eq("id", s.id);
 
     if (!uErr) updated++;
@@ -44,14 +98,13 @@ export async function GET(req: Request) {
     // log (اختياري)
     await admin.from("streamer_status_logs").insert({
       streamer_id: s.id,
-      status: s.last_status ?? "unknown",
+      status: result.status,
+      viewer_count: result.viewers,
+      title: result.title,
+      category: result.category,
       checked_at: nowIso,
     });
   }
 
-  return NextResponse.json({
-    ok: true,
-    checked: streamers?.length ?? 0,
-    updated,
-  });
+  return NextResponse.json({ ok: true, checked, updated });
 }
