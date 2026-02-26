@@ -52,9 +52,21 @@ const [channelUrl, setChannelUrl] = useState("");
     return;
   }
 
+  let finalUsername = username.trim();
+
+  // إذا المستخدم لصق رابط في خانة URL نطلع الـ slug منه
+  try {
+    const u = new URL(channelUrl.trim());
+    const slug = u.pathname.replace("/", "").trim();
+    if (slug) finalUsername = slug;
+  } catch {}
+
+  // Kick: نخليه lowercase
+  if (platform === "kick") finalUsername = finalUsername.toLowerCase();
+
   const { error } = await supabase.from("streamers").insert({
     platform,
-    username: username.trim(),
+    username: finalUsername,
     display_name: displayName.trim() || null,
     channel_url: channelUrl.trim(),
     is_enabled: true,
