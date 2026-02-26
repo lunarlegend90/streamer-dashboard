@@ -55,7 +55,7 @@ const [channelUrl, setChannelUrl] = useState("");
     const token = sessionData.session?.access_token;
 
     if (!token) {
-      setMsg("❌ Unauthorized (no session). Please login.");
+      setMsg("❌ لا يوجد تسجيل دخول. ارجع لصفحة login.");
       return;
     }
 
@@ -64,14 +64,20 @@ const [channelUrl, setChannelUrl] = useState("");
       headers: { Authorization: `Bearer ${token}` },
     });
 
-    const text = await res.text(); // نقرأه كنص أولاً
-    setMsg(`HTTP ${res.status}: ${text}`);
+    const data = await res.json();
+
+    if (!res.ok || !data.ok) {
+      setMsg(`❌ خطأ: ${data.error ?? "Unknown error"}`);
+      return;
+    }
+
+    setMsg(`✅ تم تحديث الحالات (${data.updated}/${data.checked})`);
   } catch (e: any) {
     setMsg(`❌ Error: ${e?.message ?? e}`);
   }
 
-  // تحديث القائمة بدون تخريب الرسالة
-  load(true);
+  load(true); // تحديث القائمة بدون تخريب الرسالة
+
 };
 
   const addStreamer = async () => {
