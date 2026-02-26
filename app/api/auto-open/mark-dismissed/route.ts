@@ -17,7 +17,7 @@ function supabaseAdmin() {
   );
 }
 
-export async function GET(req: Request) {
+export async function POST(req: Request) {
   const auth = req.headers.get("authorization") || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
   if (!token) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
@@ -27,23 +27,15 @@ export async function GET(req: Request) {
   const user = userData.user;
   if (!user) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
+  const { notificationId } = await req.json();
+
   const admin = supabaseAdmin();
 
-  const { data, error } = await admin
+  await admin
     .from("open_notifications")
-    .select(
-      "id, streamer_id, created_at, status, streamers(id, platform, username, display_name, channel_url, last_status)"
-    )
-    .eq("user_id", user.id)
-    .eq("status", "pending")
-    .order("created_at", { ascending: false })
-    .limit(20);
+    .update({ status: "dismissed" })
+    .eq("id", notificationId)
+    .eq("user_id", user.id);
 
-  if (error) return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
-
-  const items = (data ?? []).filter(
-  (x: any) => (x.streamers?.last_status ?? "").toLowerCase() === "online"
-);
-
-return NextResponse.json({ ok: true, items });
+  return NextResponse.json({ ok: true });
 }
