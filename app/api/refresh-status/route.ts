@@ -78,12 +78,12 @@ async function checkKick(username: string) {
 
   const json: any = await res.json();
   const isLive = Boolean(json?.livestream?.is_live);
-  return {
-    status: isLive ? "online" : "offline",
-    title: json?.livestream?.session_title ?? null,
-    category: json?.livestream?.categories?.[0]?.name ?? null,
-    viewers: json?.livestream?.viewers ?? null,
-  };
+ return {
+  status: isLive ? "online" : "offline",
+  title: `DEBUG isLive=${String(isLive)} slug=${json?.slug} hasLivestream=${String(Boolean(json?.livestream))}`,
+  category: json?.livestream?.categories?.[0]?.name ?? null,
+  viewers: json?.livestream?.viewers ?? null,
+};
 }
 
 export async function POST(req: Request) {
