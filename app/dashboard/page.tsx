@@ -50,21 +50,27 @@ const [channelUrl, setChannelUrl] = useState("");
  const refreshStatus = async () => {
   setMsg("جاري تحديث الحالات...");
 
-  const { data: sessionData } = await supabase.auth.getSession();
-  const token = sessionData.session?.access_token;
+  try {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
 
-  if (!token) {
-    setMsg("لا يوجد تسجيل دخول. ارجع لصفحة login.");
-    return;
+    if (!token) {
+      setMsg("❌ Unauthorized (no session). Please login.");
+      return;
+    }
+
+    const res = await fetch("/api/refresh-status", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const text = await res.text(); // نقرأه كنص أولاً
+    setMsg(`HTTP ${res.status}: ${text}`);
+  } catch (e: any) {
+    setMsg(`❌ Error: ${e?.message ?? e}`);
   }
 
-  const res = await fetch("/api/refresh-status", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-  });
-
-  const data = await res.json();
-  setMsg(data.ok ? `✅ تم تحديث الحالات (${data.updated}/${data.checked})` : `خطأ: ${data.error}`);
+  // تحديث القائمة بدون تخريب الرسالة
   load(true);
 };
 
