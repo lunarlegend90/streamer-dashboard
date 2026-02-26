@@ -114,6 +114,34 @@ export default function DashboardPage() {
     await loadPending();
   };
 
+  const dismissNow = async (n: PendingNotif) => {
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      setMsg("❌ لا يوجد تسجيل دخول. ارجع لصفحة login.");
+      return;
+    }
+
+    const res = await fetch("/api/auto-open/mark-dismissed", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ notificationId: n.id }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok || !data.ok) {
+      setMsg(`❌ Dismiss error: ${data.error ?? res.status}`);
+      return;
+    }
+
+    await loadPending();
+  };
+
   const refreshStatus = async () => {
     setMsg("جاري تحديث الحالات...");
 
@@ -171,17 +199,14 @@ export default function DashboardPage() {
 
     let finalUsername = username.trim();
 
-    // استخراج slug من الرابط
     try {
       const u = new URL(channelUrl.trim());
       const slug = u.pathname.replace("/", "").trim();
       if (slug) finalUsername = slug;
     } catch {}
 
-    // lowercase لـ Kick/Twitch
     if (platform === "kick" || platform === "twitch") finalUsername = finalUsername.toLowerCase();
 
-    // منع التكرار (platform + username)
     const exists = streamers.some(
       (s) =>
         (s.platform ?? "").toLowerCase() === platform.toLowerCase() &&
@@ -219,7 +244,6 @@ export default function DashboardPage() {
     window.location.href = "/login";
   };
 
-  // Auto-open settings API
   const loadAutoOpenSettings = async () => {
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData.session?.access_token;
@@ -229,7 +253,7 @@ export default function DashboardPage() {
       headers: { Authorization: `Bearer ${token}` },
     });
 
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
 
     if (res.ok && data.ok) {
       setAutoOpenEnabled(Boolean(data.auto_open_enabled));
@@ -260,7 +284,7 @@ export default function DashboardPage() {
       }),
     });
 
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
 
     if (!res.ok || !data.ok) {
       setMsg(`❌ خطأ حفظ الإعدادات: ${data.error ?? res.status}`);
@@ -311,7 +335,6 @@ export default function DashboardPage() {
         {msg || "—"}
       </div>
 
-      {/* Auto-open settings */}
       <div style={{ border: "1px solid #333", borderRadius: 12, padding: 12, marginTop: 16 }}>
         <h2>Auto-Open Settings</h2>
 
@@ -357,9 +380,14 @@ export default function DashboardPage() {
                     Status: <b>{n.streamers.last_status}</b>
                   </div>
 
-                  <button onClick={() => openNow(n)} style={{ padding: 10 }}>
-                    Open
-                  </button>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button onClick={() => openNow(n)} style={{ padding: 10 }}>
+                      Open
+                    </button>
+                    <button onClick={() => dismissNow(n)} style={{ padding: 10 }}>
+                      Dismiss
+                    </button>
+                  </div>
                 </div>
 
                 <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>
