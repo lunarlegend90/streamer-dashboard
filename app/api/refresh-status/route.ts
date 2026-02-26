@@ -9,7 +9,7 @@ function supabaseAdmin() {
   );
 }
 
-// تحقق تسجيل الدخول: لازم يرسل Authorization: Bearer <access_token>
+// لازم يرسل Authorization: Bearer <access_token>
 async function requireAuth(req: Request) {
   const auth = req.headers.get("authorization") || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
@@ -29,15 +29,85 @@ async function checkKick(username: string) {
     headers: { "User-Agent": "Mozilla/5.0 (CronBot)" },
     cache: "no-store",
   });
+
   if (!res.ok) return { status: "unknown", title: null, category: null, viewers: null };
 
   const json: any = await res.json();
   const isLive = Boolean(json?.is_live);
+
   return {
     status: isLive ? "online" : "offline",
     title: json?.livestream?.session_title ?? null,
     category: json?.livestream?.categories?.[0]?.name ?? null,
     viewers: json?.livestream?.viewers ?? null,
+  };
+}
+
+/** =======================
+ *  Twitch helpers
+ *  ======================= */
+let twitchTokenCache: { token: string; expiresAt: number } | null = null;
+
+async function getTwitchAppToken() {
+  const now = Date.now();
+  if (twitchTokenCache && now < twitchTokenCache.expiresAt) return twitchTokenCache.token;
+
+  const clientId = process.env.TWITCH_CLIENT_ID!;
+  const clientSecret = process.env.TWITCH_CLIENT_SECRET!;
+
+  const body = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    grant_type: "client_credentials",
+  });
+
+  const res = await fetch("https://id.twitch.tv/oauth2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+    cache: "no-store",
+  });
+
+  if (!res.ok) return null;
+
+  const json: any = await res.json();
+  const token = json.access_token as string;
+  const expiresIn = (json.expires_in as number) ?? 3600;
+
+  // ناقص 60 ثانية احتياط قبل انتهاء الصلاحية
+  twitchTokenCache = { token, expiresAt: now + (expiresIn - 60) * 1000 };
+  return token;
+}
+
+async function checkTwitch(username: string) {
+  const clientId = process.env.TWITCH_CLIENT_ID!;
+  const token = await getTwitchAppToken();
+  if (!token) return { status: "unknown", title: null, category: null, viewers: null };
+
+  const url = `https://api.twitch.tv/helix/streams?user_login=${encodeURIComponent(
+    username.toLowerCase()
+  )}`;
+
+  const res = await fetch(url, {
+    headers: {
+      "Client-Id": clientId,
+      Authorization: `Bearer ${token}`,
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) return { status: "unknown", title: null, category: null, viewers: null };
+
+  const json: any = await res.json();
+  const stream = json?.data?.[0];
+
+  if (!stream) return { status: "offline", title: null, category: null, viewers: null };
+
+  return {
+    status: "online",
+    title: stream.title ?? null,
+    category: stream.game_name ?? null,
+    viewers: stream.viewer_count ?? null,
   };
 }
 
@@ -62,11 +132,13 @@ export async function POST(req: Request) {
   for (const s of streamers ?? []) {
     checked++;
 
-    let result = { status: "unknown", title: null, category: null, viewers: null };
+    let result: { status: string; title: string | null; category: string | null; viewers: number | null } =
+      { status: "unknown", title: null, category: null, viewers: null };
 
-    if ((s.platform ?? "").toLowerCase() === "kick") {
-      result = await checkKick(s.username);
-    }
+    const p = (s.platform ?? "").toLowerCase();
+
+    if (p === "kick") result = await checkKick(s.username);
+    else if (p === "twitch") result = await checkTwitch(s.username);
 
     const nowIso = new Date().toISOString();
 
