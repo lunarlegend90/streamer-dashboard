@@ -35,6 +35,7 @@ export default function DashboardPage() {
 const [username, setUsername] = useState("");
 const [displayName, setDisplayName] = useState("");
 const [channelUrl, setChannelUrl] = useState("");
+const [pending, setPending] = useState<PendingNotif[]>([]);
 
   const load = async (silent = false) => {
   if (!silent) setMsg("جاري تحميل البيانات...");
@@ -95,6 +96,48 @@ const [channelUrl, setChannelUrl] = useState("");
 
 };
 
+const loadPending = async () => {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
+
+  if (!token) {
+    setPending([]);
+    return;
+  }
+
+  const res = await fetch("/api/auto-open/pending", {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  const data = await res.json();
+  if (data.ok) setPending(data.items ?? []);
+};
+
+const openNow = async (n: PendingNotif) => {
+  const { data: sessionData } = await supabase.auth.getSession();
+  const token = sessionData.session?.access_token;
+
+  if (!token) {
+    setMsg("❌ لا يوجد تسجيل دخول. ارجع لصفحة login.");
+    return;
+  }
+
+  // افتح القناة
+  window.open(n.streamers.channel_url, "_blank", "noopener,noreferrer");
+
+  // سجل opened + cooldown
+  await fetch("/api/auto-open/mark-opened", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ notificationId: n.id, streamerId: n.streamer_id }),
+  });
+
+  await loadPending();
+};
+
   const addStreamer = async () => {
   setMsg("جاري الإضافة...");
   if (!username.trim() || !channelUrl.trim()) {
@@ -112,8 +155,8 @@ const [channelUrl, setChannelUrl] = useState("");
   } catch {}
 
   // Kick: نخليه lowercase
-  if (platform === "kick") finalUsername = finalUsername.toLowerCase();
-
+  if (platform === "kick" || platform === "twitch") finalUsername = finalUsername.toLowerCase();
+  
   const { error } = await supabase.from("streamers").insert({
     platform,
     username: finalUsername,
@@ -136,8 +179,15 @@ const [channelUrl, setChannelUrl] = useState("");
 };
 
   useEffect(() => {
-    load();
-  }, []);
+  load();
+  loadPending();
+
+  const t = setInterval(() => {
+    loadPending();
+  }, 15000);
+
+  return () => clearInterval(t);
+}, []);
 
   return (
     <div style={{ maxWidth: 900, margin: "40px auto", fontFamily: "sans-serif" }}>
@@ -151,6 +201,34 @@ const [channelUrl, setChannelUrl] = useState("");
       <div style={{ marginTop: 10, padding: 10, border: "1px solid #555", borderRadius: 8 }}>
   {msg || "—"}
 </div>
+
+{pending.length > 0 && (
+  <div style={{ border: "1px solid #333", borderRadius: 12, padding: 12, marginTop: 16 }}>
+    <h2>New Live Streams</h2>
+
+    <div style={{ display: "grid", gap: 10 }}>
+      {pending.map((n) => (
+        <div key={n.id} style={{ border: "1px solid #444", borderRadius: 10, padding: 12 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
+            <div>
+              <b>{n.streamers.display_name ?? n.streamers.username}</b> ({n.streamers.platform})
+              <br />
+              Status: <b>{n.streamers.last_status}</b>
+            </div>
+
+            <button onClick={() => openNow(n)} style={{ padding: 10 }}>
+              Open
+            </button>
+          </div>
+
+          <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>
+            queued at: {new Date(n.created_at).toLocaleString()}
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
 
       <div style={{ border: "1px solid #333", borderRadius: 12, padding: 12, marginTop: 16 }}>
   <h2>Add Streamer</h2>
