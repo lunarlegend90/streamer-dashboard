@@ -49,6 +49,67 @@ async function checkKick(username: string) {
   };
 }
 
+let twitchTokenCache: { token: string; expiresAt: number } | null = null;
+
+async function getTwitchAppToken() {
+  const now = Date.now();
+  if (twitchTokenCache && now < twitchTokenCache.expiresAt) return twitchTokenCache.token;
+
+  const clientId = process.env.TWITCH_CLIENT_ID!;
+  const clientSecret = process.env.TWITCH_CLIENT_SECRET!;
+
+  const body = new URLSearchParams({
+    client_id: clientId,
+    client_secret: clientSecret,
+    grant_type: "client_credentials",
+  });
+
+  const res = await fetch("https://id.twitch.tv/oauth2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  if (!res.ok) return null;
+
+  const json: any = await res.json();
+  const token = json.access_token as string;
+  const expiresIn = (json.expires_in as number) ?? 3600;
+
+  twitchTokenCache = { token, expiresAt: now + (expiresIn - 60) * 1000 };
+  return token;
+}
+
+async function checkTwitch(username: string) {
+  const clientId = process.env.TWITCH_CLIENT_ID!;
+  const token = await getTwitchAppToken();
+  if (!token) return { status: "unknown", title: null, category: null, viewers: null };
+
+  const url = `https://api.twitch.tv/helix/streams?user_login=${encodeURIComponent(username)}`;
+
+  const res = await fetch(url, {
+    headers: {
+      "Client-Id": clientId,
+      Authorization: `Bearer ${token}`,
+    },
+    cache: "no-store",
+  });
+
+  if (!res.ok) return { status: "unknown", title: null, category: null, viewers: null };
+
+  const json: any = await res.json();
+  const stream = json?.data?.[0];
+
+  if (!stream) return { status: "offline", title: null, category: null, viewers: null };
+
+  return {
+    status: "online",
+    title: stream.title ?? null,
+    category: stream.game_name ?? null,
+    viewers: stream.viewer_count ?? null,
+  };
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const secret = url.searchParams.get("secret");
