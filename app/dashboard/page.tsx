@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabaseClient";
 
 type Streamer = {
   id: string;
+  user_id?: string;
   platform: string;
   username: string;
   display_name: string | null;
@@ -56,6 +57,12 @@ export default function DashboardPage() {
   // 🔊 Sound toggle (localStorage)
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const lastPendingCountRef = useRef<number>(0);
+
+  // ✅ Admin plan control
+  const [isAdmin, setIsAdmin] = useState<boolean>(false);
+  const [adminTarget, setAdminTarget] = useState<string>(""); // email OR uuid
+  const [adminPlan, setAdminPlan] = useState<"standard" | "elite" | "plus" | "pro">("standard");
+  const [adminStatus, setAdminStatus] = useState<"free" | "active" | "trialing">("active");
 
   const normalizeStatus = (s: string) => (s ?? "unknown").toLowerCase();
   const statusRank: Record<string, number> = { online: 0, offline: 1, unknown: 2 };
@@ -235,7 +242,6 @@ export default function DashboardPage() {
       .maybeSingle();
 
     if (error) {
-      // نخليه يكمل لكن نوضح رسالة
       setMsg(`⚠️ Subscription check error: ${error.message}`);
       return true;
     }
@@ -251,16 +257,34 @@ export default function DashboardPage() {
     return true;
   };
 
+  // ✅ check admin
+  const loadIsAdmin = async () => {
+    const { data: u } = await supabase.auth.getUser();
+    const user = u.user;
+    if (!user) return;
+
+    const { data, error } = await supabase.from("profiles").select("is_admin").eq("id", user.id).maybeSingle();
+    if (!error && data) setIsAdmin(Boolean((data as any).is_admin));
+  };
+
   // ---------- Data ----------
   const load = async (silent = false) => {
     if (!silent) setMsg("جاري تحميل البيانات...");
 
     const { data: userData } = await supabase.auth.getUser();
-    setEmail(userData.user?.email ?? "");
+    const me = userData.user;
+
+    setEmail(me?.email ?? "");
+
+    if (!me) {
+      if (!silent) setMsg("❌ لا يوجد تسجيل دخول.");
+      return;
+    }
 
     const { data, error } = await supabase
       .from("streamers")
-      .select("id, platform, username, display_name, channel_url, last_status")
+      .select("id, user_id, platform, username, display_name, channel_url, last_status")
+      .eq("user_id", me.id) // ✅ فقط ستريمرات المستخدم
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -425,6 +449,7 @@ export default function DashboardPage() {
     loadPending();
   };
 
+  // ✅ Add streamer via API (enforces plan limits)
   const addStreamer = async () => {
     setMsg("جاري الإضافة...");
     if (!username.trim() || !channelUrl.trim()) {
@@ -432,44 +457,40 @@ export default function DashboardPage() {
       return;
     }
 
-    let finalUsername = username.trim();
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
 
-    try {
-      const u = new URL(channelUrl.trim());
-      const slug = u.pathname.replace("/", "").trim();
-      if (slug) finalUsername = slug;
-    } catch {}
-
-    finalUsername = finalUsername.toLowerCase();
-
-    const exists = streamers.some(
-      (s) => (s.platform ?? "").toLowerCase() === "kick" && (s.username ?? "").toLowerCase() === finalUsername
-    );
-
-    if (exists) {
-      setMsg("⚠️ هذا الستريمر موجود مسبقًا.");
+    if (!token) {
+      setMsg("❌ لا يوجد تسجيل دخول. ارجع لصفحة login.");
       return;
     }
 
-    const { error } = await supabase.from("streamers").insert({
-      platform: "kick",
-      username: finalUsername,
-      display_name: displayName.trim() || null,
-      channel_url: channelUrl.trim(),
-      is_enabled: true,
-      last_status: "unknown",
+    const res = await fetch("/api/streamers/add", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        platform: "kick",
+        username: username.trim(),
+        display_name: displayName.trim() || null,
+        channel_url: channelUrl.trim(),
+      }),
     });
 
-    if (error) {
-      setMsg(`خطأ: ${error.message}`);
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok || !data.ok) {
+      setMsg(`❌ ${data.error ?? "Unknown error"}`);
       return;
     }
 
     setUsername("");
     setDisplayName("");
     setChannelUrl("");
-    setMsg("✅ تمت إضافة الستريمر");
-    loadPending();
+    setMsg(`✅ تمت الإضافة (Plan: ${data.plan}, ${data.current}/${data.limit})`);
+    await loadPending();
   };
 
   const signOut = async () => {
@@ -527,6 +548,48 @@ export default function DashboardPage() {
     setMsg("✅ تم حفظ الإعدادات");
   };
 
+  // ✅ Admin: set plan by email/uuid
+  const adminSetPlan = async () => {
+    const target = adminTarget.trim();
+    if (!target) {
+      setMsg("❌ اكتب User ID أو Email أول.");
+      return;
+    }
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      setMsg("❌ لا يوجد تسجيل دخول.");
+      return;
+    }
+
+    const isEmail = target.includes("@");
+    setMsg("جاري تحديث الخطة...");
+
+    const res = await fetch("/api/admin/set-plan", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({
+        ...(isEmail ? { email: target } : { user_id: target }),
+        plan: adminPlan,
+        status: adminStatus,
+      }),
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok || !data.ok) {
+      setMsg(`❌ Admin set plan error: ${data.error ?? res.status}`);
+      return;
+    }
+
+    setMsg(`✅ Plan updated: ${data.user_id} → ${data.plan} (${data.status}) | limit=${data.plan_limit ?? "?"}`);
+  };
+
   // ✅ تحديث ذكي لستريمر واحد بدل load(true)
   const applyStreamerChange = (payload: any) => {
     const newRow = payload?.new as any;
@@ -535,6 +598,7 @@ export default function DashboardPage() {
     if (newRow?.id) {
       const mapped: Streamer = {
         id: newRow.id,
+        user_id: newRow.user_id,
         platform: newRow.platform,
         username: newRow.username,
         display_name: newRow.display_name ?? null,
@@ -587,6 +651,11 @@ export default function DashboardPage() {
       await load(true);
       await loadPending();
       await loadAutoOpenSettings();
+      await loadIsAdmin();
+
+      // fetch current user id to filter realtime (best effort)
+      const { data: u } = await supabase.auth.getUser();
+      const me = u.user;
 
       const notifsChannel = supabase
         .channel("open_notifications_changes")
@@ -597,9 +666,18 @@ export default function DashboardPage() {
 
       const streamersChannel = supabase
         .channel("streamers_changes")
-        .on("postgres_changes", { event: "*", schema: "public", table: "streamers" }, (payload) => {
-          applyStreamerChange(payload);
-        })
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "streamers",
+            ...(me?.id ? { filter: `user_id=eq.${me.id}` } : {}),
+          } as any,
+          (payload) => {
+            applyStreamerChange(payload);
+          }
+        )
         .subscribe();
 
       // cleanup
@@ -666,7 +744,6 @@ export default function DashboardPage() {
         <div style={{ fontSize: 13, color: msg ? "var(--foreground)" : "var(--muted)" }}>{msg || "—"}</div>
       </div>
 
-      {/* (الباقي مثل ما هو عندك) */}
       {/* 🔔 Banner if pending */}
       {pending.length > 0 && (
         <div style={{ ...styles.banner, marginTop: 14 }}>
@@ -738,6 +815,69 @@ export default function DashboardPage() {
           </button>
         </div>
       </div>
+
+      {/* ✅ Admin Card */}
+      {isAdmin && (
+        <div style={{ ...styles.card, marginTop: 16 }}>
+          <h2 style={styles.sectionTitle}>Admin: Set User Plan</h2>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            <label style={styles.label}>
+              <span style={{ color: "var(--muted)", fontSize: 13 }}>Target (User ID or Email)</span>
+              <input
+                value={adminTarget}
+                onChange={(e) => setAdminTarget(e.target.value)}
+                style={styles.input}
+                placeholder="UUID أو email@example.com"
+              />
+            </label>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <label style={{ ...styles.label, flex: 1, minWidth: 180 }}>
+                <span style={{ color: "var(--muted)", fontSize: 13 }}>Plan</span>
+                <select value={adminPlan} onChange={(e) => setAdminPlan(e.target.value as any)} style={styles.input}>
+                  <option value="standard">standard (30)</option>
+                  <option value="elite">elite (100)</option>
+                  <option value="plus">plus (200)</option>
+                  <option value="pro">pro (300)</option>
+                </select>
+              </label>
+
+              <label style={{ ...styles.label, flex: 1, minWidth: 180 }}>
+                <span style={{ color: "var(--muted)", fontSize: 13 }}>Status</span>
+                <select value={adminStatus} onChange={(e) => setAdminStatus(e.target.value as any)} style={styles.input}>
+                  <option value="active">active</option>
+                  <option value="trialing">trialing</option>
+                  <option value="free">free</option>
+                </select>
+              </label>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button style={styles.btnPrimary} onClick={adminSetPlan}>
+                Apply Plan
+              </button>
+
+              <button
+                style={styles.btnSecondary}
+                onClick={async () => {
+                  const { data: u } = await supabase.auth.getUser();
+                  const me = u.user;
+                  if (me?.email) setAdminTarget(me.email);
+                }}
+                title="Fill my email"
+              >
+                Use My Email
+              </button>
+            </div>
+
+            <div style={{ color: "var(--muted)", fontSize: 12, lineHeight: 1.6 }}>
+              اكتب UID من Supabase Auth → Users أو اكتب Email.  
+              Standard مجاني (30)، Elite (100)، Plus (200)، Pro (300).
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Pending */}
       {pending.length > 0 && (
