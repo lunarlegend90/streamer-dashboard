@@ -30,8 +30,66 @@ async function requireAuth(req: Request) {
 const ALLOWED_PLANS = ["standard", "elite", "plus", "pro"] as const;
 type PlanKey = (typeof ALLOWED_PLANS)[number];
 
+const PLAN_LIMITS: Record<PlanKey, number> = {
+  standard: 30,
+  elite: 100,
+  plus: 200,
+  pro: 300,
+};
+
 function isPlan(v: any): v is PlanKey {
   return ALLOWED_PLANS.includes(String(v).toLowerCase() as PlanKey);
+}
+
+async function resolveUserId(admin: any, input: { user_id?: string; email?: string }) {
+  const userId = String(input.user_id ?? "").trim();
+  const email = String(input.email ?? "").trim().toLowerCase();
+
+  if (userId) {
+    // تأكد إن الـ UUID موجود في Auth
+    const { data, error } = await admin.auth.admin.getUserById(userId);
+    if (error || !data?.user) return null;
+    return data.user.id;
+  }
+
+  if (email) {
+    // ابحث بالإيميل في Auth
+    const { data, error } = await admin.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    if (error) return null;
+    const u = (data?.users ?? []).find((x: any) => String(x.email ?? "").toLowerCase() === email);
+    return u?.id ?? null;
+  }
+
+  return null;
+}
+
+async function safeUpsertSubscription(
+  admin: any,
+  payload: {
+    user_id: string;
+    status: string;
+    price_id: string | null;
+    current_period_end: string | null;
+    updated_at: string;
+  }
+) {
+  // 1) جرّب update أول (ما يحتاج unique)
+  const { data: updated, error: uErr } = await admin
+    .from("subscriptions")
+    .update(payload)
+    .eq("user_id", payload.user_id)
+    .select("user_id")
+    .maybeSingle();
+
+  if (uErr) return { ok: false as const, error: uErr };
+
+  if (updated?.user_id) return { ok: true as const };
+
+  // 2) إذا ما لقى صف، insert
+  const { error: iErr } = await admin.from("subscriptions").insert(payload);
+  if (iErr) return { ok: false as const, error: iErr };
+
+  return { ok: true as const };
 }
 
 export async function POST(req: Request) {
@@ -55,13 +113,9 @@ export async function POST(req: Request) {
     body = await req.json();
   } catch {}
 
-  const targetUserId = String(body?.user_id ?? "").trim();
   const planRaw = body?.plan;
   const statusRaw = String(body?.status ?? "active").toLowerCase();
 
-  if (!targetUserId) {
-    return NextResponse.json({ ok: false, error: "user_id is required" }, { status: 400 });
-  }
   if (!isPlan(planRaw)) {
     return NextResponse.json(
       { ok: false, error: `plan must be one of: ${ALLOWED_PLANS.join(", ")}` },
@@ -69,8 +123,9 @@ export async function POST(req: Request) {
     );
   }
 
-  // status: نخليها "active" للمدفوع و "free" أو "inactive" للمجاني (standard)
   const plan = String(planRaw).toLowerCase() as PlanKey;
+
+  // status: standard = free، الباقي = active/trialing
   const status =
     plan === "standard"
       ? "free"
@@ -78,21 +133,34 @@ export async function POST(req: Request) {
       ? statusRaw
       : "active";
 
-  // اختياري: current_period_end بعيد لو حاب
+  // ✅ user_id أو email
+  const targetUserId = await resolveUserId(admin, { user_id: body?.user_id, email: body?.email });
+  if (!targetUserId) {
+    return NextResponse.json(
+      { ok: false, error: "Target user not found. Provide valid user_id or email." },
+      { status: 404 }
+    );
+  }
+
+  // اختياري: current_period_end بعيد (بدون Stripe)
   const farFuture = new Date(Date.now() + 3650 * 24 * 60 * 60 * 1000).toISOString(); // ~10 years
 
-  const { error: upErr } = await admin.from("subscriptions").upsert(
-    {
-      user_id: targetUserId,
-      status,
-      price_id: plan, // ✅ بدون Stripe: نخزن plan key هنا
-      current_period_end: plan === "standard" ? null : farFuture,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: "user_id" }
-  );
+  const payload = {
+    user_id: targetUserId,
+    status,
+    price_id: plan, // ✅ نخزن plan key هنا
+    current_period_end: plan === "standard" ? null : farFuture,
+    updated_at: new Date().toISOString(),
+  };
 
-  if (upErr) return NextResponse.json({ ok: false, error: upErr.message }, { status: 500 });
+  const up = await safeUpsertSubscription(admin, payload);
+  if (!up.ok) return NextResponse.json({ ok: false, error: up.error.message }, { status: 500 });
 
-  return NextResponse.json({ ok: true, user_id: targetUserId, plan, status });
+  return NextResponse.json({
+    ok: true,
+    user_id: targetUserId,
+    plan,
+    status,
+    plan_limit: PLAN_LIMITS[plan],
+  });
 }
