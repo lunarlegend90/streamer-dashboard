@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 type Streamer = {
@@ -48,6 +48,10 @@ export default function DashboardPage() {
   const [autoOpenEnabled, setAutoOpenEnabled] = useState<boolean>(true);
   const [cooldownMinutes, setCooldownMinutes] = useState<number>(30);
 
+  // 🔊 Sound toggle (localStorage)
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
+  const lastPendingCountRef = useRef<number>(0);
+
   const normalizeStatus = (s: string) => (s ?? "unknown").toLowerCase();
   const statusRank: Record<string, number> = { online: 0, offline: 1, unknown: 2 };
 
@@ -88,6 +92,7 @@ export default function DashboardPage() {
       cursor: "pointer",
       transition: "transform 0.08s ease, background 0.15s ease, border-color 0.15s ease",
       fontWeight: 700,
+      userSelect: "none",
     };
 
     const btnPrimary: React.CSSProperties = {
@@ -127,7 +132,20 @@ export default function DashboardPage() {
 
     const sectionTitle: React.CSSProperties = { margin: "0 0 10px 0", fontSize: 18 };
 
-    return { card, label, input, smallInput, btnPrimary, btnSecondary, btnDanger, btnGhost, chip, sectionTitle };
+    const banner: React.CSSProperties = {
+      ...card,
+      padding: 12,
+      borderRadius: 14,
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 12,
+      border: "1px solid rgba(42,168,255,0.22)",
+      background:
+        "linear-gradient(135deg, rgba(42,168,255,0.14) 0%, rgba(255,106,0,0.10) 65%, rgba(255,255,255,0.04) 100%)",
+    };
+
+    return { card, banner, label, input, smallInput, btnPrimary, btnSecondary, btnDanger, btnGhost, chip, sectionTitle };
   }, []);
 
   const statusBadge = (st: string) => {
@@ -167,6 +185,29 @@ export default function DashboardPage() {
         UNKNOWN
       </span>
     );
+  };
+
+  // 🔊 small beep (no external files)
+  const beep = async () => {
+    try {
+      const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = "sine";
+      o.frequency.value = 880;
+      g.gain.value = 0.03;
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.start();
+      setTimeout(() => {
+        o.stop();
+        ctx.close();
+      }, 180);
+    } catch {
+      // ignore
+    }
   };
 
   // ---------- Data ----------
@@ -262,6 +303,39 @@ export default function DashboardPage() {
       return;
     }
 
+    await loadPending();
+  };
+
+  // ✅ dismiss all pending
+  const dismissAll = async () => {
+    if (pending.length === 0) return;
+
+    const yes = confirm(`Dismiss all (${pending.length}) notifications?`);
+    if (!yes) return;
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      setMsg("❌ لا يوجد تسجيل دخول. ارجع لصفحة login.");
+      return;
+    }
+
+    setMsg("جاري إخفاء كل التنبيهات...");
+
+    // استدعاء mark-dismissed لكل إشعار (بسيط وموثوق)
+    for (const n of pending) {
+      await fetch("/api/auto-open/mark-dismissed", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ notificationId: n.id }),
+      });
+    }
+
+    setMsg("✅ تم إخفاء كل التنبيهات");
     await loadPending();
   };
 
@@ -443,6 +517,30 @@ export default function DashboardPage() {
     }
   };
 
+  // Load sound preference once
+  useEffect(() => {
+    try {
+      const v = localStorage.getItem("nexus_sound");
+      if (v === "0") setSoundEnabled(false);
+      if (v === "1") setSoundEnabled(true);
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // 🔔 Update tab title + 🔊 beep on new pending
+  useEffect(() => {
+    const count = pending.length;
+    document.title = count > 0 ? `Nexus (${count})` : "Nexus";
+
+    const prev = lastPendingCountRef.current;
+    // beep only when count increases
+    if (soundEnabled && count > prev) {
+      void beep();
+    }
+    lastPendingCountRef.current = count;
+  }, [pending.length, soundEnabled]);
+
   // ✅ Realtime: open_notifications + streamers
   useEffect(() => {
     load();
@@ -519,6 +617,40 @@ export default function DashboardPage() {
           Sign Out
         </button>
       </div>
+
+      {/* 🔔 Banner if pending */}
+      {pending.length > 0 && (
+        <div style={{ ...styles.banner, marginTop: 14 }}>
+          <div style={{ display: "grid", gap: 2 }}>
+            <div style={{ fontWeight: 900 }}>
+              🔔 New live streams: <span style={{ color: "var(--foreground)" }}>{pending.length}</span>
+            </div>
+            <div style={{ color: "var(--muted)", fontSize: 12 }}>
+              Open them الآن أو سوِ Dismiss — العنوان في التبويب يتحدث تلقائيًا.
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <button
+              style={styles.btnSecondary}
+              onClick={() => {
+                const next = !soundEnabled;
+                setSoundEnabled(next);
+                try {
+                  localStorage.setItem("nexus_sound", next ? "1" : "0");
+                } catch {}
+              }}
+              title="Toggle sound"
+            >
+              {soundEnabled ? "🔊 Sound: ON" : "🔇 Sound: OFF"}
+            </button>
+
+            <button style={styles.btnDanger} onClick={dismissAll}>
+              Dismiss All
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Message */}
       <div style={{ ...styles.card, marginTop: 14, padding: 12 }}>
@@ -608,12 +740,7 @@ export default function DashboardPage() {
         <div style={{ display: "grid", gap: 10 }}>
           <label style={styles.label}>
             <span style={{ color: "var(--muted)", fontSize: 13 }}>Platform</span>
-            <select
-              value={platform}
-              onChange={() => setPlatform("kick")}
-              style={styles.input}
-              disabled
-            >
+            <select value={platform} onChange={() => setPlatform("kick")} style={styles.input} disabled>
               <option value="kick">kick</option>
             </select>
           </label>
