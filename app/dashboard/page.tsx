@@ -294,16 +294,22 @@ export default function DashboardPage() {
     setMsg("✅ تم حفظ الإعدادات");
   };
 
+  // ✅ Realtime بدل polling
   useEffect(() => {
     load();
     loadPending();
     loadAutoOpenSettings();
 
-    const t = setInterval(() => {
-      loadPending();
-    }, 15000);
+    const channel = supabase
+      .channel("open_notifications_changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "open_notifications" }, () => {
+        loadPending();
+      })
+      .subscribe();
 
-    return () => clearInterval(t);
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const visibleStreamers = streamers
