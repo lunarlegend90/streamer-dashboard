@@ -27,6 +27,11 @@ type PendingNotif = {
   };
 };
 
+type SubRow = {
+  status: string | null;
+  current_period_end: string | null;
+};
+
 export default function DashboardPage() {
   const [email, setEmail] = useState<string>("");
   const [streamers, setStreamers] = useState<Streamer[]>([]);
@@ -210,6 +215,42 @@ export default function DashboardPage() {
     }
   };
 
+  // ✅ Subscription gate: redirect non-subscribed → /billing
+  const checkSubscriptionGate = async () => {
+    const { data: u } = await supabase.auth.getUser();
+    const user = u.user;
+
+    if (!user) {
+      window.location.href = "/login";
+      return false;
+    }
+
+    // يثبت الإيميل فوق
+    setEmail(user.email ?? "");
+
+    const { data, error } = await supabase
+      .from("subscriptions")
+      .select("status,current_period_end")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (error) {
+      // نخليه يكمل لكن نوضح رسالة
+      setMsg(`⚠️ Subscription check error: ${error.message}`);
+      return true;
+    }
+
+    const row = (data as SubRow | null) ?? null;
+    const st = (row?.status ?? "inactive").toLowerCase();
+
+    if (st !== "active" && st !== "trialing") {
+      window.location.href = "/billing";
+      return false;
+    }
+
+    return true;
+  };
+
   // ---------- Data ----------
   const load = async (silent = false) => {
     if (!silent) setMsg("جاري تحميل البيانات...");
@@ -323,7 +364,6 @@ export default function DashboardPage() {
 
     setMsg("جاري إخفاء كل التنبيهات...");
 
-    // استدعاء mark-dismissed لكل إشعار (بسيط وموثوق)
     for (const n of pending) {
       await fetch("/api/auto-open/mark-dismissed", {
         method: "POST",
@@ -534,37 +574,40 @@ export default function DashboardPage() {
     document.title = count > 0 ? `Nexus (${count})` : "Nexus";
 
     const prev = lastPendingCountRef.current;
-    // beep only when count increases
-    if (soundEnabled && count > prev) {
-      void beep();
-    }
+    if (soundEnabled && count > prev) void beep();
     lastPendingCountRef.current = count;
   }, [pending.length, soundEnabled]);
 
   // ✅ Realtime: open_notifications + streamers
   useEffect(() => {
-    load();
-    loadPending();
-    loadAutoOpenSettings();
+    (async () => {
+      const ok = await checkSubscriptionGate();
+      if (!ok) return;
 
-    const notifsChannel = supabase
-      .channel("open_notifications_changes")
-      .on("postgres_changes", { event: "*", schema: "public", table: "open_notifications" }, () => {
-        loadPending();
-      })
-      .subscribe();
+      await load(true);
+      await loadPending();
+      await loadAutoOpenSettings();
 
-    const streamersChannel = supabase
-      .channel("streamers_changes")
-      .on("postgres_changes", { event: "*", schema: "public", table: "streamers" }, (payload) => {
-        applyStreamerChange(payload);
-      })
-      .subscribe();
+      const notifsChannel = supabase
+        .channel("open_notifications_changes")
+        .on("postgres_changes", { event: "*", schema: "public", table: "open_notifications" }, () => {
+          loadPending();
+        })
+        .subscribe();
 
-    return () => {
-      supabase.removeChannel(notifsChannel);
-      supabase.removeChannel(streamersChannel);
-    };
+      const streamersChannel = supabase
+        .channel("streamers_changes")
+        .on("postgres_changes", { event: "*", schema: "public", table: "streamers" }, (payload) => {
+          applyStreamerChange(payload);
+        })
+        .subscribe();
+
+      // cleanup
+      return () => {
+        supabase.removeChannel(notifsChannel);
+        supabase.removeChannel(streamersChannel);
+      };
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -618,6 +661,12 @@ export default function DashboardPage() {
         </button>
       </div>
 
+      {/* Message */}
+      <div style={{ ...styles.card, marginTop: 14, padding: 12 }}>
+        <div style={{ fontSize: 13, color: msg ? "var(--foreground)" : "var(--muted)" }}>{msg || "—"}</div>
+      </div>
+
+      {/* (الباقي مثل ما هو عندك) */}
       {/* 🔔 Banner if pending */}
       {pending.length > 0 && (
         <div style={{ ...styles.banner, marginTop: 14 }}>
@@ -651,11 +700,6 @@ export default function DashboardPage() {
           </div>
         </div>
       )}
-
-      {/* Message */}
-      <div style={{ ...styles.card, marginTop: 14, padding: 12 }}>
-        <div style={{ fontSize: 13, color: msg ? "var(--foreground)" : "var(--muted)" }}>{msg || "—"}</div>
-      </div>
 
       {/* Auto-Open Settings */}
       <div style={{ ...styles.card, marginTop: 16 }}>
@@ -747,32 +791,17 @@ export default function DashboardPage() {
 
           <label style={styles.label}>
             <span style={{ color: "var(--muted)", fontSize: 13 }}>Username (required)</span>
-            <input
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              style={styles.input}
-              placeholder="مثال: nofear"
-            />
+            <input value={username} onChange={(e) => setUsername(e.target.value)} style={styles.input} placeholder="مثال: nofear" />
           </label>
 
           <label style={styles.label}>
             <span style={{ color: "var(--muted)", fontSize: 13 }}>Display Name (optional)</span>
-            <input
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              style={styles.input}
-              placeholder="مثال: NOFEAR"
-            />
+            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} style={styles.input} placeholder="مثال: NOFEAR" />
           </label>
 
           <label style={styles.label}>
             <span style={{ color: "var(--muted)", fontSize: 13 }}>Channel URL (required)</span>
-            <input
-              value={channelUrl}
-              onChange={(e) => setChannelUrl(e.target.value)}
-              style={styles.input}
-              placeholder="https://kick.com/..."
-            />
+            <input value={channelUrl} onChange={(e) => setChannelUrl(e.target.value)} style={styles.input} placeholder="https://kick.com/..." />
           </label>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
@@ -833,8 +862,7 @@ export default function DashboardPage() {
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
                   <div style={{ display: "grid", gap: 6 }}>
                     <div style={{ fontSize: 15 }}>
-                      <b>{s.display_name ?? s.username}</b>{" "}
-                      <span style={{ color: "var(--muted)" }}>({s.platform})</span>
+                      <b>{s.display_name ?? s.username}</b> <span style={{ color: "var(--muted)" }}>({s.platform})</span>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <span style={{ color: "var(--muted)", fontSize: 13 }}>Status:</span>
