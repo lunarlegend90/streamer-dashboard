@@ -95,6 +95,23 @@ export default function DashboardPage() {
       padding: "10px 12px",
     };
 
+    // ✅ Dark select + dark options (prevents white dropdown)
+    const select: React.CSSProperties = {
+      ...input,
+      appearance: "none",
+      WebkitAppearance: "none",
+      MozAppearance: "none",
+      backgroundColor: "rgba(10, 14, 22, 0.85)",
+      color: "var(--foreground)",
+      border: "1px solid rgba(255,255,255,0.14)",
+      colorScheme: "dark" as any,
+    };
+
+    const option: React.CSSProperties = {
+      backgroundColor: "rgba(10, 14, 22, 0.98)",
+      color: "rgba(255,255,255,0.92)",
+    };
+
     const buttonBase: React.CSSProperties = {
       padding: "10px 14px",
       borderRadius: 12,
@@ -157,7 +174,21 @@ export default function DashboardPage() {
         "linear-gradient(135deg, rgba(42,168,255,0.14) 0%, rgba(255,106,0,0.10) 65%, rgba(255,255,255,0.04) 100%)",
     };
 
-    return { card, banner, label, input, smallInput, btnPrimary, btnSecondary, btnDanger, btnGhost, chip, sectionTitle };
+    return {
+      card,
+      banner,
+      label,
+      input,
+      smallInput,
+      select,
+      option,
+      btnPrimary,
+      btnSecondary,
+      btnDanger,
+      btnGhost,
+      chip,
+      sectionTitle,
+    };
   }, []);
 
   const statusBadge = (st: string) => {
@@ -835,20 +866,34 @@ export default function DashboardPage() {
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <label style={{ ...styles.label, flex: 1, minWidth: 180 }}>
                 <span style={{ color: "var(--muted)", fontSize: 13 }}>Plan</span>
-                <select value={adminPlan} onChange={(e) => setAdminPlan(e.target.value as any)} style={styles.input}>
-                  <option value="standard">standard (30)</option>
-                  <option value="elite">elite (100)</option>
-                  <option value="plus">plus (200)</option>
-                  <option value="pro">pro (300)</option>
+                <select value={adminPlan} onChange={(e) => setAdminPlan(e.target.value as any)} style={styles.select}>
+                  <option style={styles.option} value="standard">
+                    standard (30)
+                  </option>
+                  <option style={styles.option} value="elite">
+                    elite (100)
+                  </option>
+                  <option style={styles.option} value="plus">
+                    plus (200)
+                  </option>
+                  <option style={styles.option} value="pro">
+                    pro (300)
+                  </option>
                 </select>
               </label>
 
               <label style={{ ...styles.label, flex: 1, minWidth: 180 }}>
                 <span style={{ color: "var(--muted)", fontSize: 13 }}>Status</span>
-                <select value={adminStatus} onChange={(e) => setAdminStatus(e.target.value as any)} style={styles.input}>
-                  <option value="active">active</option>
-                  <option value="trialing">trialing</option>
-                  <option value="free">free</option>
+                <select value={adminStatus} onChange={(e) => setAdminStatus(e.target.value as any)} style={styles.select}>
+                  <option style={styles.option} value="active">
+                    active
+                  </option>
+                  <option style={styles.option} value="trialing">
+                    trialing
+                  </option>
+                  <option style={styles.option} value="free">
+                    free
+                  </option>
                 </select>
               </label>
             </div>
@@ -872,47 +917,9 @@ export default function DashboardPage() {
             </div>
 
             <div style={{ color: "var(--muted)", fontSize: 12, lineHeight: 1.6 }}>
-              اكتب UID من Supabase Auth → Users أو اكتب Email.  
+              اكتب UID من Supabase Auth → Users أو اكتب Email. <br />
               Standard مجاني (30)، Elite (100)، Plus (200)، Pro (300).
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* Pending */}
-      {pending.length > 0 && (
-        <div style={{ ...styles.card, marginTop: 16 }}>
-          <h2 style={styles.sectionTitle}>New Live Streams</h2>
-
-          <div style={{ display: "grid", gap: 10 }}>
-            {pending.map((n) => (
-              <div key={n.id} style={{ ...styles.card, padding: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-                  <div style={{ display: "grid", gap: 4 }}>
-                    <div style={{ fontSize: 15 }}>
-                      <b>{n.streamers.display_name ?? n.streamers.username}</b>{" "}
-                      <span style={{ color: "var(--muted)" }}>({n.streamers.platform})</span>
-                    </div>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ color: "var(--muted)", fontSize: 13 }}>Status:</span>
-                      {statusBadge(n.streamers.last_status)}
-                    </div>
-                    <div style={{ marginTop: 2, opacity: 0.75, fontSize: 12, color: "var(--muted)" }}>
-                      queued at: {new Date(n.created_at).toLocaleString()}
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <button style={styles.btnPrimary} onClick={() => openNow(n)}>
-                      Open
-                    </button>
-                    <button style={styles.btnSecondary} onClick={() => dismissNow(n)}>
-                      Dismiss
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ))}
           </div>
         </div>
       )}
@@ -924,8 +931,10 @@ export default function DashboardPage() {
         <div style={{ display: "grid", gap: 10 }}>
           <label style={styles.label}>
             <span style={{ color: "var(--muted)", fontSize: 13 }}>Platform</span>
-            <select value={platform} onChange={() => setPlatform("kick")} style={styles.input} disabled>
-              <option value="kick">kick</option>
+            <select value={platform} onChange={() => setPlatform("kick")} style={styles.select} disabled>
+              <option style={styles.option} value="kick">
+                kick
+              </option>
             </select>
           </label>
 
