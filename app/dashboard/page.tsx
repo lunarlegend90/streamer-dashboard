@@ -52,7 +52,7 @@ export default function DashboardPage() {
 
   const statusBadge = (st: string) => {
     const s = (st ?? "unknown").toLowerCase();
-    const base: React.CSSProperties = {
+    const base: any = {
       display: "inline-block",
       padding: "2px 10px",
       borderRadius: 999,
@@ -99,7 +99,7 @@ export default function DashboardPage() {
       headers: { Authorization: `Bearer ${token}` },
     });
 
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
 
     if (!res.ok || !data.ok) {
       setMsg(`❌ pending error: ${data.error ?? res.status}`);
@@ -178,7 +178,7 @@ export default function DashboardPage() {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok || !data.ok) {
         setMsg(`❌ خطأ: ${data.error ?? "Unknown error"}`);
@@ -231,6 +231,7 @@ export default function DashboardPage() {
         (s.platform ?? "").toLowerCase() === platform.toLowerCase() &&
         (s.username ?? "").toLowerCase() === finalUsername.toLowerCase()
     );
+
     if (exists) {
       setMsg("⚠️ هذا الستريمر موجود مسبقًا.");
       return;
@@ -337,8 +338,10 @@ export default function DashboardPage() {
       supabase.removeChannel(notifsChannel);
       supabase.removeChannel(streamersChannel);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ✅ Search + Counters
   const q = search.trim().toLowerCase();
 
   const visibleStreamers = streamers
@@ -375,7 +378,9 @@ export default function DashboardPage() {
         Logged in as: <b>{email || "..."}</b>
       </p>
 
-      <div style={{ marginTop: 10, padding: 10, border: "1px solid #555", borderRadius: 8 }}>{msg || "—"}</div>
+      <div style={{ marginTop: 10, padding: 10, border: "1px solid #555", borderRadius: 8 }}>
+        {msg || "—"}
+      </div>
 
       <div style={{ border: "1px solid #333", borderRadius: 12, padding: 12, marginTop: 16 }}>
         <h2>Auto-Open Settings</h2>
@@ -500,6 +505,7 @@ export default function DashboardPage() {
 
       <h2 style={{ marginTop: 20 }}>Streamers</h2>
 
+      {/* ✅ Search + Counters */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
         <input
           value={search}
@@ -545,6 +551,7 @@ export default function DashboardPage() {
               <div>
                 <b>{s.display_name ?? s.username}</b> ({s.platform})
               </div>
+
               <div style={{ marginTop: 6 }}>Status: {statusBadge(s.last_status)}</div>
 
               <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
