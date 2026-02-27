@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
 type Streamer = {
@@ -51,22 +51,125 @@ export default function DashboardPage() {
   const normalizeStatus = (s: string) => (s ?? "unknown").toLowerCase();
   const statusRank: Record<string, number> = { online: 0, offline: 1, unknown: 2 };
 
-  const statusBadge = (st: string) => {
-    const s = (st ?? "unknown").toLowerCase();
-    const base: any = {
-      display: "inline-block",
-      padding: "2px 10px",
-      borderRadius: 999,
-      fontSize: 12,
-      border: "1px solid #444",
+  // ---------- UI styles (Nexus) ----------
+  const styles = useMemo(() => {
+    const card: React.CSSProperties = {
+      border: "1px solid var(--card-border)",
+      background: "var(--card)",
+      borderRadius: 16,
+      padding: 16,
+      boxShadow: "0 10px 30px rgba(0,0,0,0.25)",
+      backdropFilter: "blur(10px)",
+    };
+
+    const label: React.CSSProperties = { display: "grid", gap: 6 };
+
+    const input: React.CSSProperties = {
+      width: "100%",
+      padding: "12px 12px",
+      borderRadius: 12,
+      border: "1px solid rgba(255,255,255,0.14)",
+      background: "rgba(255,255,255,0.06)",
+      color: "var(--foreground)",
+      outline: "none",
+    };
+
+    const smallInput: React.CSSProperties = {
+      ...input,
+      padding: "10px 12px",
+    };
+
+    const buttonBase: React.CSSProperties = {
+      padding: "10px 14px",
+      borderRadius: 12,
+      border: "1px solid rgba(255,255,255,0.14)",
+      color: "var(--foreground)",
+      background: "rgba(255,255,255,0.06)",
+      cursor: "pointer",
+      transition: "transform 0.08s ease, background 0.15s ease, border-color 0.15s ease",
       fontWeight: 700,
     };
 
-    if (s === "online") return <span style={{ ...base, background: "#00ff66", color: "#000" }}>ONLINE</span>;
-    if (s === "offline") return <span style={{ ...base, background: "#bbbbbb", color: "#000" }}>OFFLINE</span>;
-    return <span style={{ ...base, background: "#ffee00", color: "#000" }}>UNKNOWN</span>;
+    const btnPrimary: React.CSSProperties = {
+      ...buttonBase,
+      border: "1px solid rgba(42,168,255,0.35)",
+      background:
+        "linear-gradient(135deg, rgba(42,168,255,0.22) 0%, rgba(123,211,255,0.12) 55%, rgba(255,255,255,0.06) 100%)",
+      boxShadow: "0 0 0 1px rgba(42,168,255,0.10), 0 12px 30px rgba(42,168,255,0.12)",
+    };
+
+    const btnSecondary: React.CSSProperties = {
+      ...buttonBase,
+      border: "1px solid rgba(255,255,255,0.16)",
+      background: "rgba(255,255,255,0.06)",
+    };
+
+    const btnDanger: React.CSSProperties = {
+      ...buttonBase,
+      border: "1px solid rgba(255,106,0,0.40)",
+      background:
+        "linear-gradient(135deg, rgba(255,106,0,0.22) 0%, rgba(255,177,74,0.10) 60%, rgba(255,255,255,0.06) 100%)",
+      boxShadow: "0 0 0 1px rgba(255,106,0,0.10), 0 12px 30px rgba(255,106,0,0.12)",
+    };
+
+    const btnGhost: React.CSSProperties = {
+      ...buttonBase,
+      border: "1px solid rgba(255,255,255,0.12)",
+      background: "transparent",
+    };
+
+    const chip: React.CSSProperties = {
+      padding: "6px 10px",
+      border: "1px solid rgba(255,255,255,0.14)",
+      borderRadius: 12,
+      background: "rgba(255,255,255,0.05)",
+    };
+
+    const sectionTitle: React.CSSProperties = { margin: "0 0 10px 0", fontSize: 18 };
+
+    return { card, label, input, smallInput, btnPrimary, btnSecondary, btnDanger, btnGhost, chip, sectionTitle };
+  }, []);
+
+  const statusBadge = (st: string) => {
+    const s = (st ?? "unknown").toLowerCase();
+    const base: React.CSSProperties = {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: 6,
+      padding: "2px 10px",
+      borderRadius: 999,
+      fontSize: 12,
+      border: "1px solid rgba(255,255,255,0.16)",
+      fontWeight: 800,
+      letterSpacing: 0.4,
+      background: "rgba(255,255,255,0.06)",
+    };
+
+    if (s === "online") {
+      return (
+        <span style={{ ...base, borderColor: "rgba(42,168,255,0.40)" }}>
+          <span style={{ width: 6, height: 6, borderRadius: 99, background: "var(--nexus-ice)" }} />
+          ONLINE
+        </span>
+      );
+    }
+    if (s === "offline") {
+      return (
+        <span style={{ ...base, borderColor: "rgba(255,255,255,0.22)", opacity: 0.9 }}>
+          <span style={{ width: 6, height: 6, borderRadius: 99, background: "rgba(255,255,255,0.55)" }} />
+          OFFLINE
+        </span>
+      );
+    }
+    return (
+      <span style={{ ...base, borderColor: "rgba(255,106,0,0.40)" }}>
+        <span style={{ width: 6, height: 6, borderRadius: 99, background: "var(--nexus-fire)" }} />
+        UNKNOWN
+      </span>
+    );
   };
 
+  // ---------- Data ----------
   const load = async (silent = false) => {
     if (!silent) setMsg("جاري تحميل البيانات...");
 
@@ -191,7 +294,6 @@ export default function DashboardPage() {
       setMsg(`❌ Error: ${e?.message ?? e}`);
     }
 
-    // load(true);  // ❌ ما نحتاجه غالبًا بسبب realtime
     loadPending();
   };
 
@@ -206,7 +308,6 @@ export default function DashboardPage() {
     }
 
     setMsg("✅ تم حذف الستريمر");
-    // load(true); // ❌ realtime بيحدثه، لكن نخلي pending يتحدث
     loadPending();
   };
 
@@ -225,10 +326,8 @@ export default function DashboardPage() {
       if (slug) finalUsername = slug;
     } catch {}
 
-    // ✅ kick lowercase
     finalUsername = finalUsername.toLowerCase();
 
-    // ✅ منع التكرار داخل kick فقط
     const exists = streamers.some(
       (s) => (s.platform ?? "").toLowerCase() === "kick" && (s.username ?? "").toLowerCase() === finalUsername
     );
@@ -256,8 +355,6 @@ export default function DashboardPage() {
     setDisplayName("");
     setChannelUrl("");
     setMsg("✅ تمت إضافة الستريمر");
-
-    // realtime بيجيب السطر الجديد، بس نخلي pending يتحدث
     loadPending();
   };
 
@@ -321,7 +418,6 @@ export default function DashboardPage() {
     const newRow = payload?.new as any;
     const oldRow = payload?.old as any;
 
-    // INSERT/UPDATE
     if (newRow?.id) {
       const mapped: Streamer = {
         id: newRow.id,
@@ -342,7 +438,6 @@ export default function DashboardPage() {
       return;
     }
 
-    // DELETE
     if (oldRow?.id) {
       setStreamers((prev) => prev.filter((s) => s.id !== oldRow.id));
     }
@@ -377,7 +472,6 @@ export default function DashboardPage() {
 
   // ✅ Search + Counters + Kick only view
   const q = search.trim().toLowerCase();
-
   const kickStreamers = streamers.filter((s) => (s.platform ?? "").toLowerCase() === "kick");
 
   const visibleStreamers = kickStreamers
@@ -401,80 +495,105 @@ export default function DashboardPage() {
   const countOffline = kickStreamers.filter((s) => normalizeStatus(s.last_status) === "offline").length;
   const countUnknown = kickStreamers.filter((s) => normalizeStatus(s.last_status) === "unknown").length;
 
+  // ---------- Render ----------
   return (
-    <div style={{ maxWidth: 900, margin: "40px auto", fontFamily: "sans-serif" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <h1>Dashboard</h1>
-        <button onClick={signOut} style={{ padding: 10 }}>
+    <div style={{ maxWidth: 980, margin: "40px auto", padding: "0 16px", fontFamily: "var(--font-geist-sans), Arial, sans-serif" }}>
+      {/* Header */}
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+        <div style={{ display: "grid", gap: 4 }}>
+          <h1 style={{ margin: 0, fontSize: 34, letterSpacing: 0.5 }}>
+            <span style={{ color: "var(--nexus-fire)" }}>N</span>
+            <span style={{ color: "var(--foreground)" }}>exus</span>
+          </h1>
+          <div style={{ color: "var(--muted)", fontSize: 13 }}>
+            Logged in as: <b style={{ color: "var(--foreground)" }}>{email || "..."}</b>
+          </div>
+        </div>
+
+        <button
+          onClick={signOut}
+          style={styles.btnGhost}
+          onMouseDown={(e) => ((e.currentTarget.style.transform as any) = "scale(0.98)")}
+          onMouseUp={(e) => ((e.currentTarget.style.transform as any) = "scale(1)")}
+        >
           Sign Out
         </button>
       </div>
 
-      <p>
-        Logged in as: <b>{email || "..."}</b>
-      </p>
-
-      <div style={{ marginTop: 10, padding: 10, border: "1px solid #555", borderRadius: 8 }}>
-        {msg || "—"}
+      {/* Message */}
+      <div style={{ ...styles.card, marginTop: 14, padding: 12 }}>
+        <div style={{ fontSize: 13, color: msg ? "var(--foreground)" : "var(--muted)" }}>{msg || "—"}</div>
       </div>
 
-      <div style={{ border: "1px solid #333", borderRadius: 12, padding: 12, marginTop: 16 }}>
-        <h2>Auto-Open Settings</h2>
+      {/* Auto-Open Settings */}
+      <div style={{ ...styles.card, marginTop: 16 }}>
+        <h2 style={styles.sectionTitle}>Auto-Open Settings</h2>
 
         <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 8 }}>
           <input
             type="checkbox"
             checked={autoOpenEnabled}
             onChange={(e) => setAutoOpenEnabled(e.target.checked)}
+            style={{ transform: "scale(1.05)" }}
           />
-          Enable Auto-Open notifications
+          <span style={{ color: "var(--foreground)" }}>Enable Auto-Open notifications</span>
         </label>
 
-        <div style={{ marginTop: 10 }}>
-          <label>
-            Cooldown (minutes)
+        <div style={{ marginTop: 12 }}>
+          <label style={styles.label}>
+            <span style={{ color: "var(--muted)", fontSize: 13 }}>Cooldown (minutes)</span>
             <input
               type="number"
               value={cooldownMinutes}
               onChange={(e) => setCooldownMinutes(Number(e.target.value))}
-              style={{ width: "100%", padding: 10, marginTop: 4 }}
+              style={styles.smallInput}
               min={0}
               max={1440}
             />
           </label>
         </div>
 
-        <button onClick={saveAutoOpenSettings} style={{ padding: 10, marginTop: 12 }}>
-          Save Settings
-        </button>
+        <div style={{ display: "flex", gap: 10, marginTop: 14, flexWrap: "wrap" }}>
+          <button style={styles.btnPrimary} onClick={saveAutoOpenSettings}>
+            Save Settings
+          </button>
+          <button style={styles.btnSecondary} onClick={refreshStatus} title="Force refresh now">
+            Refresh Status
+          </button>
+        </div>
       </div>
 
+      {/* Pending */}
       {pending.length > 0 && (
-        <div style={{ border: "1px solid #333", borderRadius: 12, padding: 12, marginTop: 16 }}>
-          <h2>New Live Streams</h2>
+        <div style={{ ...styles.card, marginTop: 16 }}>
+          <h2 style={styles.sectionTitle}>New Live Streams</h2>
 
           <div style={{ display: "grid", gap: 10 }}>
             {pending.map((n) => (
-              <div key={n.id} style={{ border: "1px solid #444", borderRadius: 10, padding: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}>
-                  <div>
-                    <b>{n.streamers.display_name ?? n.streamers.username}</b> ({n.streamers.platform})
-                    <br />
-                    Status: {statusBadge(n.streamers.last_status)}
+              <div key={n.id} style={{ ...styles.card, padding: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <div style={{ fontSize: 15 }}>
+                      <b>{n.streamers.display_name ?? n.streamers.username}</b>{" "}
+                      <span style={{ color: "var(--muted)" }}>({n.streamers.platform})</span>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ color: "var(--muted)", fontSize: 13 }}>Status:</span>
+                      {statusBadge(n.streamers.last_status)}
+                    </div>
+                    <div style={{ marginTop: 2, opacity: 0.75, fontSize: 12, color: "var(--muted)" }}>
+                      queued at: {new Date(n.created_at).toLocaleString()}
+                    </div>
                   </div>
 
-                  <div style={{ display: "flex", gap: 8 }}>
-                    <button onClick={() => openNow(n)} style={{ padding: 10 }}>
+                  <div style={{ display: "flex", gap: 10 }}>
+                    <button style={styles.btnPrimary} onClick={() => openNow(n)}>
                       Open
                     </button>
-                    <button onClick={() => dismissNow(n)} style={{ padding: 10 }}>
+                    <button style={styles.btnSecondary} onClick={() => dismissNow(n)}>
                       Dismiss
                     </button>
                   </div>
-                </div>
-
-                <div style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}>
-                  queued at: {new Date(n.created_at).toLocaleString()}
                 </div>
               </div>
             ))}
@@ -482,124 +601,145 @@ export default function DashboardPage() {
         </div>
       )}
 
-      <div style={{ border: "1px solid #333", borderRadius: 12, padding: 12, marginTop: 16 }}>
-        <h2>Add Streamer (Kick Only)</h2>
+      {/* Add Streamer */}
+      <div style={{ ...styles.card, marginTop: 16 }}>
+        <h2 style={styles.sectionTitle}>Add Streamer (Kick Only)</h2>
 
-        <div style={{ display: "grid", gap: 8 }}>
-          <label>
-            Platform
+        <div style={{ display: "grid", gap: 10 }}>
+          <label style={styles.label}>
+            <span style={{ color: "var(--muted)", fontSize: 13 }}>Platform</span>
             <select
               value={platform}
               onChange={() => setPlatform("kick")}
-              style={{ width: "100%", padding: 10, marginTop: 4 }}
+              style={styles.input}
               disabled
             >
               <option value="kick">kick</option>
             </select>
           </label>
 
-          <label>
-            Username (required)
+          <label style={styles.label}>
+            <span style={{ color: "var(--muted)", fontSize: 13 }}>Username (required)</span>
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              style={{ width: "100%", padding: 10, marginTop: 4 }}
+              style={styles.input}
               placeholder="مثال: nofear"
             />
           </label>
 
-          <label>
-            Display Name (optional)
+          <label style={styles.label}>
+            <span style={{ color: "var(--muted)", fontSize: 13 }}>Display Name (optional)</span>
             <input
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
-              style={{ width: "100%", padding: 10, marginTop: 4 }}
+              style={styles.input}
               placeholder="مثال: NOFEAR"
             />
           </label>
 
-          <label>
-            Channel URL (required)
+          <label style={styles.label}>
+            <span style={{ color: "var(--muted)", fontSize: 13 }}>Channel URL (required)</span>
             <input
               value={channelUrl}
               onChange={(e) => setChannelUrl(e.target.value)}
-              style={{ width: "100%", padding: 10, marginTop: 4 }}
+              style={styles.input}
               placeholder="https://kick.com/..."
             />
           </label>
 
-          <button onClick={addStreamer} style={{ padding: 12 }}>
-            Add
-          </button>
-
-          <button onClick={refreshStatus} style={{ padding: 10, marginTop: 10 }}>
-            Refresh Status
-          </button>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+            <button style={styles.btnPrimary} onClick={addStreamer}>
+              Add
+            </button>
+            <button style={styles.btnSecondary} onClick={refreshStatus}>
+              Refresh Status
+            </button>
+          </div>
         </div>
       </div>
 
-      <h2 style={{ marginTop: 20 }}>Streamers (Kick)</h2>
+      {/* Streamers */}
+      <div style={{ marginTop: 18 }}>
+        <h2 style={{ margin: "0 0 10px 0", fontSize: 18 }}>Streamers (Kick)</h2>
 
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
-        <input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search by name/username..."
-          style={{ padding: 10, minWidth: 260, borderRadius: 8, border: "1px solid #444" }}
-        />
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by name/username..."
+            style={{ ...styles.input, minWidth: 260, maxWidth: 360 }}
+          />
 
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <span style={{ padding: "6px 10px", border: "1px solid #444", borderRadius: 8 }}>
+          <span style={styles.chip}>
             Online: <b>{countOnline}</b>
           </span>
-          <span style={{ padding: "6px 10px", border: "1px solid #444", borderRadius: 8 }}>
+          <span style={styles.chip}>
             Offline: <b>{countOffline}</b>
           </span>
-          <span style={{ padding: "6px 10px", border: "1px solid #444", borderRadius: 8 }}>
+          <span style={styles.chip}>
             Unknown: <b>{countUnknown}</b>
           </span>
         </div>
-      </div>
 
-      <div style={{ display: "flex", gap: 8, marginTop: 8, marginBottom: 8 }}>
-        <button onClick={() => setStatusFilter("all")} style={{ padding: 8 }}>
-          All
-        </button>
-        <button onClick={() => setStatusFilter("online")} style={{ padding: 8 }}>
-          Online
-        </button>
-        <button onClick={() => setStatusFilter("offline")} style={{ padding: 8 }}>
-          Offline
-        </button>
-        <button onClick={() => setStatusFilter("unknown")} style={{ padding: 8 }}>
-          Unknown
-        </button>
-      </div>
-
-      {visibleStreamers.length === 0 ? (
-        <p>لا يوجد ستريمرات الآن.</p>
-      ) : (
-        <div style={{ display: "grid", gap: 10 }}>
-          {visibleStreamers.map((s) => (
-            <div key={s.id} style={{ border: "1px solid #333", borderRadius: 10, padding: 12 }}>
-              <div>
-                <b>{s.display_name ?? s.username}</b> ({s.platform})
-              </div>
-
-              <div style={{ marginTop: 6 }}>Status: {statusBadge(s.last_status)}</div>
-
-              <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
-                <a href={s.channel_url} target="_blank" rel="noreferrer">
-                  Open Channel
-                </a>
-                <button onClick={() => deleteStreamer(s.id)} style={{ padding: "6px 10px" }}>
-                  Delete
-                </button>
-              </div>
-            </div>
-          ))}
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+          <button style={statusFilter === "all" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("all")}>
+            All
+          </button>
+          <button style={statusFilter === "online" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("online")}>
+            Online
+          </button>
+          <button style={statusFilter === "offline" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("offline")}>
+            Offline
+          </button>
+          <button style={statusFilter === "unknown" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("unknown")}>
+            Unknown
+          </button>
         </div>
-      )}
+
+        <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+          {visibleStreamers.length === 0 ? (
+            <div style={{ ...styles.card, color: "var(--muted)" }}>لا يوجد ستريمرات الآن.</div>
+          ) : (
+            visibleStreamers.map((s) => (
+              <div key={s.id} style={{ ...styles.card, padding: 14 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                  <div style={{ display: "grid", gap: 6 }}>
+                    <div style={{ fontSize: 15 }}>
+                      <b>{s.display_name ?? s.username}</b>{" "}
+                      <span style={{ color: "var(--muted)" }}>({s.platform})</span>
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ color: "var(--muted)", fontSize: 13 }}>Status:</span>
+                      {statusBadge(s.last_status)}
+                    </div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                    <a
+                      href={s.channel_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{
+                        ...styles.btnSecondary,
+                        textDecoration: "none",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      Open Channel
+                    </a>
+                    <button style={styles.btnDanger} onClick={() => deleteStreamer(s.id)}>
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
     </div>
   );
 }
