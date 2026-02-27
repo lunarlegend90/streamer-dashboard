@@ -40,12 +40,31 @@ export default function DashboardPage() {
   const [pending, setPending] = useState<PendingNotif[]>([]);
   const [statusFilter, setStatusFilter] = useState<"all" | "online" | "offline" | "unknown">("all");
 
+  // ✅ UI extras
+  const [search, setSearch] = useState("");
+
   // Auto-open settings
   const [autoOpenEnabled, setAutoOpenEnabled] = useState<boolean>(true);
   const [cooldownMinutes, setCooldownMinutes] = useState<number>(30);
 
   const normalizeStatus = (s: string) => (s ?? "unknown").toLowerCase();
   const statusRank: Record<string, number> = { online: 0, offline: 1, unknown: 2 };
+
+  const statusBadge = (st: string) => {
+    const s = (st ?? "unknown").toLowerCase();
+    const base: React.CSSProperties = {
+      display: "inline-block",
+      padding: "2px 10px",
+      borderRadius: 999,
+      fontSize: 12,
+      border: "1px solid #444",
+      fontWeight: 700,
+    };
+
+    if (s === "online") return <span style={{ ...base, background: "#00ff66", color: "#000" }}>ONLINE</span>;
+    if (s === "offline") return <span style={{ ...base, background: "#bbbbbb", color: "#000" }}>OFFLINE</span>;
+    return <span style={{ ...base, background: "#ffee00", color: "#000" }}>UNKNOWN</span>;
+  };
 
   const load = async (silent = false) => {
     if (!silent) setMsg("جاري تحميل البيانات...");
@@ -294,28 +313,43 @@ export default function DashboardPage() {
     setMsg("✅ تم حفظ الإعدادات");
   };
 
-  // ✅ Realtime بدل polling
+  // ✅ Realtime: open_notifications + streamers
   useEffect(() => {
     load();
     loadPending();
     loadAutoOpenSettings();
 
-    const channel = supabase
+    const notifsChannel = supabase
       .channel("open_notifications_changes")
       .on("postgres_changes", { event: "*", schema: "public", table: "open_notifications" }, () => {
         loadPending();
       })
       .subscribe();
 
+    const streamersChannel = supabase
+      .channel("streamers_changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "streamers" }, () => {
+        load(true);
+      })
+      .subscribe();
+
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(notifsChannel);
+      supabase.removeChannel(streamersChannel);
     };
   }, []);
+
+  const q = search.trim().toLowerCase();
 
   const visibleStreamers = streamers
     .filter((s) => {
       const st = normalizeStatus(s.last_status);
-      return statusFilter === "all" ? true : st === statusFilter;
+      const passStatus = statusFilter === "all" ? true : st === statusFilter;
+
+      const name = (s.display_name ?? s.username ?? "").toLowerCase();
+      const passSearch = q ? name.includes(q) || (s.username ?? "").toLowerCase().includes(q) : true;
+
+      return passStatus && passSearch;
     })
     .sort((a, b) => {
       const ra = statusRank[normalizeStatus(a.last_status)] ?? 9;
@@ -323,6 +357,10 @@ export default function DashboardPage() {
       if (ra !== rb) return ra - rb;
       return (a.display_name ?? a.username).localeCompare(b.display_name ?? b.username);
     });
+
+  const countOnline = streamers.filter((s) => normalizeStatus(s.last_status) === "online").length;
+  const countOffline = streamers.filter((s) => normalizeStatus(s.last_status) === "offline").length;
+  const countUnknown = streamers.filter((s) => normalizeStatus(s.last_status) === "unknown").length;
 
   return (
     <div style={{ maxWidth: 900, margin: "40px auto", fontFamily: "sans-serif" }}>
@@ -337,9 +375,7 @@ export default function DashboardPage() {
         Logged in as: <b>{email || "..."}</b>
       </p>
 
-      <div style={{ marginTop: 10, padding: 10, border: "1px solid #555", borderRadius: 8 }}>
-        {msg || "—"}
-      </div>
+      <div style={{ marginTop: 10, padding: 10, border: "1px solid #555", borderRadius: 8 }}>{msg || "—"}</div>
 
       <div style={{ border: "1px solid #333", borderRadius: 12, padding: 12, marginTop: 16 }}>
         <h2>Auto-Open Settings</h2>
@@ -383,7 +419,7 @@ export default function DashboardPage() {
                   <div>
                     <b>{n.streamers.display_name ?? n.streamers.username}</b> ({n.streamers.platform})
                     <br />
-                    Status: <b>{n.streamers.last_status}</b>
+                    Status: {statusBadge(n.streamers.last_status)}
                   </div>
 
                   <div style={{ display: "flex", gap: 8 }}>
@@ -464,6 +500,27 @@ export default function DashboardPage() {
 
       <h2 style={{ marginTop: 20 }}>Streamers</h2>
 
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
+        <input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search by name/username..."
+          style={{ padding: 10, minWidth: 260, borderRadius: 8, border: "1px solid #444" }}
+        />
+
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ padding: "6px 10px", border: "1px solid #444", borderRadius: 8 }}>
+            Online: <b>{countOnline}</b>
+          </span>
+          <span style={{ padding: "6px 10px", border: "1px solid #444", borderRadius: 8 }}>
+            Offline: <b>{countOffline}</b>
+          </span>
+          <span style={{ padding: "6px 10px", border: "1px solid #444", borderRadius: 8 }}>
+            Unknown: <b>{countUnknown}</b>
+          </span>
+        </div>
+      </div>
+
       <div style={{ display: "flex", gap: 8, marginTop: 8, marginBottom: 8 }}>
         <button onClick={() => setStatusFilter("all")} style={{ padding: 8 }}>
           All
@@ -488,9 +545,7 @@ export default function DashboardPage() {
               <div>
                 <b>{s.display_name ?? s.username}</b> ({s.platform})
               </div>
-              <div>
-                Status: <b>{s.last_status}</b>
-              </div>
+              <div style={{ marginTop: 6 }}>Status: {statusBadge(s.last_status)}</div>
 
               <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
                 <a href={s.channel_url} target="_blank" rel="noreferrer">
