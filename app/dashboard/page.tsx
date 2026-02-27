@@ -32,7 +32,8 @@ export default function DashboardPage() {
   const [streamers, setStreamers] = useState<Streamer[]>([]);
   const [msg, setMsg] = useState<string>("");
 
-  const [platform, setPlatform] = useState("kick");
+  // ✅ Kick only
+  const [platform, setPlatform] = useState<"kick">("kick");
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [channelUrl, setChannelUrl] = useState("");
@@ -224,11 +225,13 @@ export default function DashboardPage() {
       if (slug) finalUsername = slug;
     } catch {}
 
-    if (platform === "kick" || platform === "twitch") finalUsername = finalUsername.toLowerCase();
+    // ✅ kick lowercase
+    finalUsername = finalUsername.toLowerCase();
 
+    // ✅ منع التكرار داخل kick فقط
     const exists = streamers.some(
       (s) =>
-        (s.platform ?? "").toLowerCase() === platform.toLowerCase() &&
+        (s.platform ?? "").toLowerCase() === "kick" &&
         (s.username ?? "").toLowerCase() === finalUsername.toLowerCase()
     );
 
@@ -238,7 +241,7 @@ export default function DashboardPage() {
     }
 
     const { error } = await supabase.from("streamers").insert({
-      platform,
+      platform: "kick",
       username: finalUsername,
       display_name: displayName.trim() || null,
       channel_url: channelUrl.trim(),
@@ -341,10 +344,12 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ Search + Counters
+  // ✅ Search + Counters + Kick only view
   const q = search.trim().toLowerCase();
 
-  const visibleStreamers = streamers
+  const kickStreamers = streamers.filter((s) => (s.platform ?? "").toLowerCase() === "kick");
+
+  const visibleStreamers = kickStreamers
     .filter((s) => {
       const st = normalizeStatus(s.last_status);
       const passStatus = statusFilter === "all" ? true : st === statusFilter;
@@ -361,9 +366,9 @@ export default function DashboardPage() {
       return (a.display_name ?? a.username).localeCompare(b.display_name ?? b.username);
     });
 
-  const countOnline = streamers.filter((s) => normalizeStatus(s.last_status) === "online").length;
-  const countOffline = streamers.filter((s) => normalizeStatus(s.last_status) === "offline").length;
-  const countUnknown = streamers.filter((s) => normalizeStatus(s.last_status) === "unknown").length;
+  const countOnline = kickStreamers.filter((s) => normalizeStatus(s.last_status) === "online").length;
+  const countOffline = kickStreamers.filter((s) => normalizeStatus(s.last_status) === "offline").length;
+  const countUnknown = kickStreamers.filter((s) => normalizeStatus(s.last_status) === "unknown").length;
 
   return (
     <div style={{ maxWidth: 900, margin: "40px auto", fontFamily: "sans-serif" }}>
@@ -447,19 +452,18 @@ export default function DashboardPage() {
       )}
 
       <div style={{ border: "1px solid #333", borderRadius: 12, padding: 12, marginTop: 16 }}>
-        <h2>Add Streamer</h2>
+        <h2>Add Streamer (Kick Only)</h2>
 
         <div style={{ display: "grid", gap: 8 }}>
           <label>
             Platform
             <select
               value={platform}
-              onChange={(e) => setPlatform(e.target.value)}
+              onChange={(e) => setPlatform("kick")}
               style={{ width: "100%", padding: 10, marginTop: 4 }}
+              disabled
             >
               <option value="kick">kick</option>
-              <option value="twitch">twitch</option>
-              <option value="youtube">youtube</option>
             </select>
           </label>
 
@@ -503,9 +507,8 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <h2 style={{ marginTop: 20 }}>Streamers</h2>
+      <h2 style={{ marginTop: 20 }}>Streamers (Kick)</h2>
 
-      {/* ✅ Search + Counters */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginTop: 10 }}>
         <input
           value={search}
