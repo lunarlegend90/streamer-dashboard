@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
+const DISCORD_INVITE_URL = "https://discord.gg/PqCMCgH7";
+
 export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -16,18 +18,6 @@ export default function LoginPage() {
       if (data.user) window.location.href = "/dashboard";
     })();
   }, []);
-
-  const signUp = async () => {
-    if (!email || !password) {
-      setMsg("❌ أدخل الإيميل والباسورد");
-      return;
-    }
-    setLoading(true);
-    setMsg("جاري إنشاء الحساب...");
-    const { error } = await supabase.auth.signUp({ email, password });
-    setLoading(false);
-    setMsg(error ? `❌ خطأ: ${error.message}` : "✅ تم إنشاء الحساب (قد تحتاج تأكيد من الإيميل)");
-  };
 
   const signIn = async () => {
     if (!email || !password) {
@@ -46,6 +36,10 @@ export default function LoginPage() {
 
     setMsg("✅ تم تسجيل الدخول");
     window.location.href = "/dashboard";
+  };
+
+  const requestAccess = () => {
+    window.open(DISCORD_INVITE_URL, "_blank", "noopener,noreferrer");
   };
 
   const card: React.CSSProperties = {
@@ -78,7 +72,7 @@ export default function LoginPage() {
     color: "var(--foreground)",
     cursor: loading ? "not-allowed" : "pointer",
     fontWeight: 800,
-    flex: 1,
+    width: "100%",
     opacity: loading ? 0.7 : 1,
   };
 
@@ -90,7 +84,7 @@ export default function LoginPage() {
     boxShadow: "0 0 0 1px rgba(42,168,255,0.10), 0 12px 30px rgba(42,168,255,0.10)",
   };
 
-  const btnSecondary: React.CSSProperties = {
+  const btnDiscord: React.CSSProperties = {
     ...btnBase,
     border: "1px solid rgba(255,106,0,0.35)",
     background:
@@ -138,14 +132,13 @@ export default function LoginPage() {
             />
           </label>
 
-          <div style={{ display: "flex", gap: 10, marginTop: 6 }}>
-            <button onClick={signIn} style={btnPrimary} disabled={loading}>
-              Sign In
-            </button>
-            <button onClick={signUp} style={btnSecondary} disabled={loading}>
-              Sign Up
-            </button>
-          </div>
+          <button onClick={signIn} style={btnPrimary} disabled={loading}>
+            Sign In
+          </button>
+
+          <button onClick={requestAccess} style={btnDiscord} disabled={loading}>
+            Request Access (Discord)
+          </button>
 
           <div
             style={{
@@ -165,7 +158,7 @@ export default function LoginPage() {
           </div>
 
           <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 6, lineHeight: 1.6 }}>
-            Tip: استخدم إيميل حقيقي لو فعّلت تأكيد الإيميل في Supabase Auth.
+            التسجيل مغلق — اضغط <b>Request Access</b> واطلب التفعيل عبر الديسكورد.
           </div>
         </div>
       </div>
