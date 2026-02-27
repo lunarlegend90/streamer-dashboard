@@ -191,7 +191,7 @@ export default function DashboardPage() {
       setMsg(`❌ Error: ${e?.message ?? e}`);
     }
 
-    load(true);
+    // load(true);  // ❌ ما نحتاجه غالبًا بسبب realtime
     loadPending();
   };
 
@@ -206,7 +206,7 @@ export default function DashboardPage() {
     }
 
     setMsg("✅ تم حذف الستريمر");
-    load(true);
+    // load(true); // ❌ realtime بيحدثه، لكن نخلي pending يتحدث
     loadPending();
   };
 
@@ -230,9 +230,7 @@ export default function DashboardPage() {
 
     // ✅ منع التكرار داخل kick فقط
     const exists = streamers.some(
-      (s) =>
-        (s.platform ?? "").toLowerCase() === "kick" &&
-        (s.username ?? "").toLowerCase() === finalUsername.toLowerCase()
+      (s) => (s.platform ?? "").toLowerCase() === "kick" && (s.username ?? "").toLowerCase() === finalUsername
     );
 
     if (exists) {
@@ -258,7 +256,8 @@ export default function DashboardPage() {
     setDisplayName("");
     setChannelUrl("");
     setMsg("✅ تمت إضافة الستريمر");
-    load();
+
+    // realtime بيجيب السطر الجديد، بس نخلي pending يتحدث
     loadPending();
   };
 
@@ -317,6 +316,38 @@ export default function DashboardPage() {
     setMsg("✅ تم حفظ الإعدادات");
   };
 
+  // ✅ تحديث ذكي لستريمر واحد بدل load(true)
+  const applyStreamerChange = (payload: any) => {
+    const newRow = payload?.new as any;
+    const oldRow = payload?.old as any;
+
+    // INSERT/UPDATE
+    if (newRow?.id) {
+      const mapped: Streamer = {
+        id: newRow.id,
+        platform: newRow.platform,
+        username: newRow.username,
+        display_name: newRow.display_name ?? null,
+        channel_url: newRow.channel_url,
+        last_status: newRow.last_status ?? "unknown",
+      };
+
+      setStreamers((prev) => {
+        const idx = prev.findIndex((s) => s.id === mapped.id);
+        if (idx === -1) return [mapped, ...prev];
+        const next = [...prev];
+        next[idx] = { ...next[idx], ...mapped };
+        return next;
+      });
+      return;
+    }
+
+    // DELETE
+    if (oldRow?.id) {
+      setStreamers((prev) => prev.filter((s) => s.id !== oldRow.id));
+    }
+  };
+
   // ✅ Realtime: open_notifications + streamers
   useEffect(() => {
     load();
@@ -332,8 +363,8 @@ export default function DashboardPage() {
 
     const streamersChannel = supabase
       .channel("streamers_changes")
-      .on("postgres_changes", { event: "*", schema: "public", table: "streamers" }, () => {
-        load(true);
+      .on("postgres_changes", { event: "*", schema: "public", table: "streamers" }, (payload) => {
+        applyStreamerChange(payload);
       })
       .subscribe();
 
@@ -459,7 +490,7 @@ export default function DashboardPage() {
             Platform
             <select
               value={platform}
-              onChange={(e) => setPlatform("kick")}
+              onChange={() => setPlatform("kick")}
               style={{ width: "100%", padding: 10, marginTop: 4 }}
               disabled
             >
