@@ -9,14 +9,59 @@ function supabaseAdmin() {
   );
 }
 
+async function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function fetchJsonWithRetry(url: string, timeoutMs = 8000) {
+  const waits = [0, 500, 1200];
+  let lastStatus = 0;
+
+  for (let i = 0; i < waits.length; i++) {
+    if (waits[i] > 0) await sleep(waits[i]);
+
+    const res = await fetchWithTimeout(
+      url,
+      {
+        headers: { "User-Agent": "Mozilla/5.0 (CronBot)" },
+        cache: "no-store",
+      },
+      timeoutMs
+    );
+
+    lastStatus = res.status;
+
+    if (res.ok) {
+      const json = await res.json();
+      return { ok: true as const, status: res.status, json };
+    }
+
+    if (res.status === 429 || (res.status >= 500 && res.status <= 599)) {
+      continue;
+    }
+
+    break;
+  }
+
+  return { ok: false as const, status: lastStatus, json: null as any };
+}
+
 async function enqueueAutoOpenForAllUsers(admin: any, streamerId: string) {
-  // settings
   const { data: settings } = await admin.from("system_settings").select("*").eq("id", 1).single();
   if (!settings?.auto_open_enabled) return;
 
   const cooldownMin = Number(settings.auto_open_cooldown_minutes ?? 0);
 
-  // all users
   const { data: users } = await admin.from("profiles").select("id");
   if (!users?.length) return;
 
@@ -24,7 +69,6 @@ async function enqueueAutoOpenForAllUsers(admin: any, streamerId: string) {
   const cutoffIso = new Date(now.getTime() - cooldownMin * 60 * 1000).toISOString();
 
   for (const u of users) {
-    // cooldown check: did this user open this streamer recently?
     const { data: recent } = await admin
       .from("auto_open_events")
       .select("id")
@@ -35,7 +79,6 @@ async function enqueueAutoOpenForAllUsers(admin: any, streamerId: string) {
 
     if (recent && recent.length > 0) continue;
 
-    // avoid duplicate pending notifications
     const { data: pending } = await admin
       .from("open_notifications")
       .select("id")
@@ -70,20 +113,20 @@ async function requireAuth(req: Request) {
 
 async function checkKick(username: string) {
   const url = `https://kick.com/api/v2/channels/${encodeURIComponent(username)}`;
-  const res = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0 (CronBot)" },
-    cache: "no-store",
-  });
-  if (!res.ok) return { status: "unknown", title: null, category: null, viewers: null };
 
-  const json: any = await res.json();
+  const r = await fetchJsonWithRetry(url, 8000);
+
+  if (!r.ok) return { status: "unknown", title: null, category: null, viewers: null };
+
+  const json: any = r.json;
   const isLive = Boolean(json?.livestream?.is_live);
- return {
-  status: isLive ? "online" : "offline",
-  title: `DEBUG isLive=${String(isLive)} slug=${json?.slug} hasLivestream=${String(Boolean(json?.livestream))}`,
-  category: json?.livestream?.categories?.[0]?.name ?? null,
-  viewers: json?.livestream?.viewers ?? null,
-};
+
+  return {
+    status: isLive ? "online" : "offline",
+    title: json?.livestream?.session_title ?? null,
+    category: json?.livestream?.categories?.[0]?.name ?? null,
+    viewers: json?.livestream?.viewers ?? null,
+  };
 }
 
 export async function POST(req: Request) {
@@ -97,7 +140,8 @@ export async function POST(req: Request) {
   const { data: streamers, error: sErr } = await admin
     .from("streamers")
     .select("*")
-    .eq("is_enabled", true);
+    .eq("is_enabled", true)
+    .eq("platform", "kick"); // ✅ Kick only
 
   if (sErr) return NextResponse.json({ ok: false, error: sErr.message }, { status: 500 });
 
@@ -105,47 +149,44 @@ export async function POST(req: Request) {
   let updated = 0;
 
   for (const s of streamers ?? []) {
-  checked++;
+    checked++;
 
-  const before = (s.last_status ?? "unknown").toLowerCase();
+    // ✅ throttle عشوائي (أخف من cron لأن المستخدم ينتظر)
+    await sleep(200 + Math.floor(Math.random() * 250)); // 200-450ms
 
-  let result: any = { status: "unknown", title: null, category: null, viewers: null };
+    const before = (s.last_status ?? "unknown").toLowerCase();
 
-  const p = (s.platform ?? "").toLowerCase();
-  if (p === "kick") result = await checkKick(s.username);
-  // (لو عندك checkTwitch هنا وتبي auto-open للتويتش بعدين، نضيفها لاحقًا)
+    const result = await checkKick(s.username);
 
-  const after = (result.status ?? "unknown").toLowerCase();
+    const after = (result.status ?? "unknown").toLowerCase();
+    if (before !== "online" && after === "online") {
+      await enqueueAutoOpenForAllUsers(admin, s.id);
+    }
 
-  // ✅ Auto-open trigger
-  if (before !== "online" && after === "online") {
-    await enqueueAutoOpenForAllUsers(admin, s.id);
+    const nowIso = new Date().toISOString();
+
+    const { error: uErr } = await admin
+      .from("streamers")
+      .update({
+        last_status: result.status,
+        last_checked_at: nowIso,
+        last_live_title: result.title,
+        last_category: result.category,
+        last_viewer_count: result.viewers,
+      })
+      .eq("id", s.id);
+
+    if (!uErr) updated++;
+
+    await admin.from("streamer_status_logs").insert({
+      streamer_id: s.id,
+      status: result.status,
+      viewer_count: result.viewers,
+      title: result.title,
+      category: result.category,
+      checked_at: nowIso,
+    });
   }
 
-  const nowIso = new Date().toISOString();
-
-  const { error: uErr } = await admin
-    .from("streamers")
-    .update({
-      last_status: result.status,
-      last_checked_at: nowIso,
-      last_live_title: result.title,
-      last_category: result.category,
-      last_viewer_count: result.viewers,
-    })
-    .eq("id", s.id);
-
-  if (!uErr) updated++;
-
-  await admin.from("streamer_status_logs").insert({
-    streamer_id: s.id,
-    status: result.status,
-    viewer_count: result.viewers,
-    title: result.title,
-    category: result.category,
-    checked_at: nowIso,
-  });
-}
-
-  return NextResponse.json({ ok: true, checked, updated });
+  return NextResponse.json({ ok: true, version: "refresh-kick-throttle-v1", checked, updated });
 }

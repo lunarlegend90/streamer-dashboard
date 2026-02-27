@@ -9,23 +9,62 @@ function supabaseAdmin() {
   );
 }
 
-type KickChannelResponse = {
-  is_live?: boolean;
-  livestream?: {
-    session_title?: string | null;
-    viewers?: number | null;
-    categories?: Array<{ name?: string | null }> | null;
-  } | null;
-};
+async function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: number) {
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function fetchJsonWithRetry(url: string, timeoutMs = 8000) {
+  // retries خفيفة لتجنب مشاكل 429/5xx المؤقتة
+  const waits = [0, 700, 1500];
+  let lastStatus = 0;
+
+  for (let i = 0; i < waits.length; i++) {
+    if (waits[i] > 0) await sleep(waits[i]);
+
+    const res = await fetchWithTimeout(
+      url,
+      {
+        headers: { "User-Agent": "Mozilla/5.0 (CronBot)" },
+        cache: "no-store",
+      },
+      timeoutMs
+    );
+
+    lastStatus = res.status;
+
+    if (res.ok) {
+      const json = await res.json();
+      return { ok: true as const, status: res.status, json };
+    }
+
+    // لو 429 أو 5xx نعيد المحاولة
+    if (res.status === 429 || (res.status >= 500 && res.status <= 599)) {
+      continue;
+    }
+
+    // باقي الأخطاء ما نعيد
+    break;
+  }
+
+  return { ok: false as const, status: lastStatus, json: null as any };
+}
 
 async function enqueueAutoOpenForAllUsers(admin: any, streamerId: string) {
-  // settings
   const { data: settings } = await admin.from("system_settings").select("*").eq("id", 1).single();
   if (!settings?.auto_open_enabled) return;
 
   const cooldownMin = Number(settings.auto_open_cooldown_minutes ?? 0);
 
-  // all users
   const { data: users } = await admin.from("profiles").select("id");
   if (!users?.length) return;
 
@@ -33,7 +72,6 @@ async function enqueueAutoOpenForAllUsers(admin: any, streamerId: string) {
   const cutoffIso = new Date(now.getTime() - cooldownMin * 60 * 1000).toISOString();
 
   for (const u of users) {
-    // cooldown check: did this user open this streamer recently?
     const { data: recent } = await admin
       .from("auto_open_events")
       .select("id")
@@ -44,7 +82,6 @@ async function enqueueAutoOpenForAllUsers(admin: any, streamerId: string) {
 
     if (recent && recent.length > 0) continue;
 
-    // avoid duplicate pending notifications
     const { data: pending } = await admin
       .from("open_notifications")
       .select("id")
@@ -66,19 +103,14 @@ async function enqueueAutoOpenForAllUsers(admin: any, streamerId: string) {
 async function checkKick(username: string) {
   const url = `https://kick.com/api/v2/channels/${encodeURIComponent(username)}`;
 
-  const res = await fetch(url, {
-    headers: { "User-Agent": "Mozilla/5.0 (CronBot)" },
-    cache: "no-store",
-  });
+  const r = await fetchJsonWithRetry(url, 8000);
+  const http = r.status;
 
-  // ✅ رجّع لنا كود الاستجابة عشان نعرف هل Kick حاجب؟
-  const http = res.status;
-
-  if (!res.ok) {
+  if (!r.ok) {
     return { status: "unknown", title: null, category: null, viewers: null, http };
   }
 
-  const json = (await res.json()) as any;
+  const json = r.json as any;
 
   const isLive = Boolean(json?.livestream?.is_live);
   const title = json?.livestream?.session_title ?? null;
@@ -91,67 +123,6 @@ async function checkKick(username: string) {
     category,
     viewers,
     http,
-  };
-}
-
-let twitchTokenCache: { token: string; expiresAt: number } | null = null;
-
-async function getTwitchAppToken() {
-  const now = Date.now();
-  if (twitchTokenCache && now < twitchTokenCache.expiresAt) return twitchTokenCache.token;
-
-  const clientId = process.env.TWITCH_CLIENT_ID!;
-  const clientSecret = process.env.TWITCH_CLIENT_SECRET!;
-
-  const body = new URLSearchParams({
-    client_id: clientId,
-    client_secret: clientSecret,
-    grant_type: "client_credentials",
-  });
-
-  const res = await fetch("https://id.twitch.tv/oauth2/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
-  });
-
-  if (!res.ok) return null;
-
-  const json: any = await res.json();
-  const token = json.access_token as string;
-  const expiresIn = (json.expires_in as number) ?? 3600;
-
-  twitchTokenCache = { token, expiresAt: now + (expiresIn - 60) * 1000 };
-  return token;
-}
-
-async function checkTwitch(username: string) {
-  const clientId = process.env.TWITCH_CLIENT_ID!;
-  const token = await getTwitchAppToken();
-  if (!token) return { status: "unknown", title: null, category: null, viewers: null };
-
-  const url = `https://api.twitch.tv/helix/streams?user_login=${encodeURIComponent(username)}`;
-
-  const res = await fetch(url, {
-    headers: {
-      "Client-Id": clientId,
-      Authorization: `Bearer ${token}`,
-    },
-    cache: "no-store",
-  });
-
-  if (!res.ok) return { status: "unknown", title: null, category: null, viewers: null };
-
-  const json: any = await res.json();
-  const stream = json?.data?.[0];
-
-  if (!stream) return { status: "offline", title: null, category: null, viewers: null };
-
-  return {
-    status: "online",
-    title: stream.title ?? null,
-    category: stream.game_name ?? null,
-    viewers: stream.viewer_count ?? null,
   };
 }
 
@@ -168,7 +139,8 @@ export async function GET(req: Request) {
   const { data: streamers, error: sErr } = await admin
     .from("streamers")
     .select("*")
-    .eq("is_enabled", true);
+    .eq("is_enabled", true)
+    .eq("platform", "kick"); // ✅ Kick only
 
   if (sErr) {
     return NextResponse.json({ ok: false, error: sErr.message }, { status: 500 });
@@ -176,49 +148,37 @@ export async function GET(req: Request) {
 
   let checked = 0;
   let updated = 0;
-  const debug: any[] = [];
 
   for (const s of streamers ?? []) {
     checked++;
 
-   const before = (s.last_status ?? "unknown").toLowerCase();
+    // ✅ throttle عشوائي بسيط بين كل قناة (يقلل احتمالية حظر Kick)
+    await sleep(400 + Math.floor(Math.random() * 400)); // 400-800ms
 
-// نفحص حسب المنصة
-let result: any = { status: "unknown", title: null, category: null, viewers: null, http: null };
+    const before = (s.last_status ?? "unknown").toLowerCase();
 
-const p = (s.platform ?? "").toLowerCase();
-if (p === "kick") result = await checkKick(s.username);
-else if (p === "twitch") result = await checkTwitch(s.username);
+    const result = await checkKick(s.username);
 
-// Auto-open trigger (فقط عند الانتقال إلى online)
-const after = (result.status ?? "unknown").toLowerCase();
-if (before !== "online" && after === "online") {
-  await enqueueAutoOpenForAllUsers(admin, s.id);
-}
+    const after = (result.status ?? "unknown").toLowerCase();
+    if (before !== "online" && after === "online") {
+      await enqueueAutoOpenForAllUsers(admin, s.id);
+    }
 
-debug.push({
-  username: s.username,
-  platform: s.platform,
-  result,
-});
+    const nowIso = new Date().toISOString();
 
-const nowIso = new Date().toISOString();
-
-// تحديث جدول streamers
-const { error: uErr } = await admin
-  .from("streamers")
-  .update({
-    last_status: result.status,
-    last_checked_at: nowIso,
-    last_live_title: result.title,
-    last_category: result.category,
-    last_viewer_count: result.viewers,
-  })
-  .eq("id", s.id);
+    const { error: uErr } = await admin
+      .from("streamers")
+      .update({
+        last_status: result.status,
+        last_checked_at: nowIso,
+        last_live_title: result.title,
+        last_category: result.category,
+        last_viewer_count: result.viewers,
+      })
+      .eq("id", s.id);
 
     if (!uErr) updated++;
 
-    // log (اختياري)
     await admin.from("streamer_status_logs").insert({
       streamer_id: s.id,
       status: result.status,
@@ -229,5 +189,5 @@ const { error: uErr } = await admin
     });
   }
 
-  return NextResponse.json({ ok: true, checked, updated });
+  return NextResponse.json({ ok: true, version: "cron-kick-throttle-v1", checked, updated });
 }
