@@ -436,70 +436,76 @@ export default function DashboardPage() {
     }
   };
 
-  // ✅ Open ALL ONLINE Kick streamers (separate tabs) - NO duplicates + canonical URL
-  const openAllOnlineNow = () => {
-    const online = streamers
-      .filter((s) => (s.platform ?? "").toLowerCase() === "kick")
-      .filter((s) => normalizeStatus(s.last_status) === "online");
+  // ✅ Open ALL ONLINE Kick streamers (separate tabs) - FINAL FIX (no repeats)
+const openAllOnlineNow = () => {
+  const online = streamers
+    .filter((s) => (s.platform ?? "").toLowerCase() === "kick")
+    .filter((s) => normalizeStatus(s.last_status) === "online");
 
-    if (online.length === 0) {
-      setMsg("لا يوجد ستريمرز Online حاليا.");
-      return;
-    }
+  if (online.length === 0) {
+    setMsg("لا يوجد ستريمرز Online حاليا.");
+    return;
+  }
 
-    if (isOpeningOnlineRef.current) return;
+  if (isOpeningOnlineRef.current) return;
 
-    const buildKickUrl = (s: Streamer) => {
-      const uname = (s.username ?? "").trim().replace(/^@+/, "").replace(/^\/+/, "");
-      if (uname) return `https://kick.com/${uname}`;
-      return (s.channel_url ?? "").trim();
-    };
+  // ✅ Unique by username (strongest)
+  const seenUser = new Set<string>();
 
-    const seen = new Set<string>();
-    const unique = online
-      .map((s) => ({ s, url: buildKickUrl(s) }))
-      .filter(({ url }) => {
-        const clean = (url ?? "").trim();
-        if (!clean) return false;
-        if (seen.has(clean)) return false;
-        seen.add(clean);
-        return true;
-      });
+  const unique = online
+    .map((s) => {
+      const uname = String(s.username ?? "")
+        .trim()
+        .replace(/^@+/, "")
+        .replace(/^\/+/, "")
+        .toLowerCase();
 
-    if (unique.length === 0) {
-      setMsg("⚠️ ما قدرت أطلع روابط صحيحة للستريمرز Online.");
-      return;
-    }
+      const url = uname ? `https://kick.com/${uname}` : String(s.channel_url ?? "").trim();
 
-    const yes = confirm(`Open ONLINE (${unique.length}) الآن؟`);
-    if (!yes) return;
+      return { s, uname, url };
+    })
+    .filter(({ uname, url }) => {
+      if (!url) return false;
+      // لو username فاضي، ما نقدر نضمن uniqueness — نخليه يمر لكن غالبًا بياناته غلط
+      const key = uname || url;
+      if (seenUser.has(key)) return false;
+      seenUser.add(key);
+      return true;
+    });
 
-    isOpeningOnlineRef.current = true;
+  const yes = confirm(`Open ONLINE (${unique.length}) الآن؟`);
+  if (!yes) return;
 
-    try {
-      let opened = 0;
+  isOpeningOnlineRef.current = true;
 
-      for (const { s, url } of unique) {
-        const windowName = `nexus_${s.id}`;
-        const w = window.open(url, windowName, "noopener,noreferrer");
-        if (!w) {
-          setMsg("⚠️ المتصفح منع فتح التبويبات. فعّل Pop-ups لموقع Nexus (Allow) ثم جرّب مرة ثانية.");
-          break;
-        }
-        opened++;
+  try {
+    // ✅ Debug: اعرض لك أول كم واحد بينفتح
+    const preview = unique
+      .slice(0, 8)
+      .map((x) => x.uname || x.url)
+      .join(" | ");
+
+    setMsg(`🚀 Opening: ${preview}${unique.length > 8 ? " ..." : ""}`);
+
+    let opened = 0;
+
+    // ✅ ALWAYS open new tab
+    for (const { url } of unique) {
+      const w = window.open(url, "_blank", "noopener,noreferrer");
+      if (!w) {
+        setMsg("⚠️ المتصفح منع فتح التبويبات. فعّل Pop-ups لموقع Nexus (Allow) ثم جرّب مرة ثانية.");
+        break;
       }
-
-      if (unique.length < online.length) {
-        setMsg(`✅ تم فتح ${opened} تبويب (تم تجاهل ${online.length - unique.length} روابط مكررة/غير صالحة).`);
-      } else {
-        setMsg(`✅ تم فتح ${opened} / ${unique.length} (ONLINE)`);
-      }
-    } finally {
-      setTimeout(() => {
-        isOpeningOnlineRef.current = false;
-      }, 800);
+      opened++;
     }
-  };
+
+    setMsg(`✅ تم فتح ${opened} / ${unique.length} تبويب (ONLINE)`);
+  } finally {
+    setTimeout(() => {
+      isOpeningOnlineRef.current = false;
+    }, 800);
+  }
+};
 
   // ✅ Admin: Fix all stored kick URLs (requires /api/admin/fix-kick-urls)
   const adminFixKickUrls = async () => {
