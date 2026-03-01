@@ -38,18 +38,15 @@ const PLAN_LIMITS: Record<PlanKey, number> = {
 
 function resolvePlanFromSubscription(sub: any): PlanKey {
   const status = String(sub?.status ?? "").toLowerCase();
-  const planKey = String(sub?.price_id ?? "").toLowerCase(); // نستخدم price_id كـ plan key
+  const planKey = String(sub?.price_id ?? "").toLowerCase();
 
-  // إذا مخزن plan key مباشرة
   if (planKey === "pro" || planKey === "plus" || planKey === "elite" || planKey === "standard") {
-    // لازم يكون active عشان نخليها مدفوعة، غير كذا ترجع Standard
     const active = status === "active" || status === "trialing";
     return active ? (planKey as PlanKey) : "standard";
   }
 
-  // الافتراضي
   const active = status === "active" || status === "trialing";
-  return active ? "elite" : "standard"; // لو active بدون planKey واضح، نخليه elite مؤقتًا
+  return active ? "elite" : "standard";
 }
 
 function normalizeKickUsernameFromUrlOrInput(username: string, channelUrl: string) {
@@ -63,7 +60,15 @@ function normalizeKickUsernameFromUrlOrInput(username: string, channelUrl: strin
     // ignore
   }
 
+  // ✅ extra hardening
+  finalUsername = finalUsername.replace(/^@+/, "").trim();
+
   return finalUsername.toLowerCase();
+}
+
+function buildCanonicalKickUrl(username: string) {
+  const u = (username ?? "").trim().replace(/^@+/, "");
+  return `https://kick.com/${u}`;
 }
 
 export async function POST(req: Request) {
@@ -80,14 +85,14 @@ export async function POST(req: Request) {
   const platform = String(body?.platform ?? "kick").toLowerCase();
   const username = String(body?.username ?? "");
   const display_name = body?.display_name ? String(body.display_name) : null;
-  const channel_url = String(body?.channel_url ?? "");
+  const channel_url_input = String(body?.channel_url ?? "");
 
   // Kick only
   if (platform !== "kick") {
     return NextResponse.json({ ok: false, error: "Kick only" }, { status: 400 });
   }
 
-  if (!username.trim() || !channel_url.trim()) {
+  if (!username.trim() || !channel_url_input.trim()) {
     return NextResponse.json({ ok: false, error: "username and channel_url are required" }, { status: 400 });
   }
 
@@ -124,7 +129,14 @@ export async function POST(req: Request) {
     );
   }
 
-  const finalUsername = normalizeKickUsernameFromUrlOrInput(username, channel_url);
+  // ✅ Normalize username and force canonical URL
+  const finalUsername = normalizeKickUsernameFromUrlOrInput(username, channel_url_input);
+
+  if (!finalUsername) {
+    return NextResponse.json({ ok: false, error: "Invalid Kick username / URL (missing channel slug)" }, { status: 400 });
+  }
+
+  const canonicalUrl = buildCanonicalKickUrl(finalUsername);
 
   // --- insert ---
   const { error: iErr } = await admin.from("streamers").insert({
@@ -132,13 +144,13 @@ export async function POST(req: Request) {
     platform: "kick",
     username: finalUsername,
     display_name,
-    channel_url: channel_url.trim(),
+    // ✅ store canonical (prevents duplicates like https://kick.com/)
+    channel_url: canonicalUrl,
     is_enabled: true,
     last_status: "unknown",
   });
 
   if (iErr) {
-    // duplicate unique constraint
     if ((iErr as any).code === "23505") {
       return NextResponse.json({ ok: false, error: "Streamer already exists." }, { status: 409 });
     }
