@@ -33,10 +33,6 @@ type SubRow = {
   current_period_end: string | null;
 };
 
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
 export default function DashboardPage() {
   const [email, setEmail] = useState<string>("");
   const [streamers, setStreamers] = useState<Streamer[]>([]);
@@ -98,8 +94,12 @@ export default function DashboardPage() {
       outline: "none",
     };
 
-    const smallInput: React.CSSProperties = { ...input, padding: "10px 12px" };
+    const smallInput: React.CSSProperties = {
+      ...input,
+      padding: "10px 12px",
+    };
 
+    // ✅ Dark select + dark options (prevents white dropdown)
     const select: React.CSSProperties = {
       ...input,
       appearance: "none",
@@ -178,7 +178,21 @@ export default function DashboardPage() {
         "linear-gradient(135deg, rgba(42,168,255,0.14) 0%, rgba(255,106,0,0.10) 65%, rgba(255,255,255,0.04) 100%)",
     };
 
-    return { card, banner, label, input, smallInput, select, option, btnPrimary, btnSecondary, btnDanger, btnGhost, chip, sectionTitle };
+    return {
+      card,
+      banner,
+      label,
+      input,
+      smallInput,
+      select,
+      option,
+      btnPrimary,
+      btnSecondary,
+      btnDanger,
+      btnGhost,
+      chip,
+      sectionTitle,
+    };
   }, []);
 
   const statusBadge = (st: string) => {
@@ -220,6 +234,7 @@ export default function DashboardPage() {
     );
   };
 
+  // 🔊 small beep (no external files)
   const beep = async () => {
     try {
       const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
@@ -237,9 +252,12 @@ export default function DashboardPage() {
         o.stop();
         ctx.close();
       }, 180);
-    } catch {}
+    } catch {
+      // ignore
+    }
   };
 
+  // ✅ Subscription gate: redirect non-subscribed → /billing
   const checkSubscriptionGate = async () => {
     const { data: u } = await supabase.auth.getUser();
     const user = u.user;
@@ -273,6 +291,7 @@ export default function DashboardPage() {
     return true;
   };
 
+  // ✅ check admin (supports either is_admin OR role=admin)
   const loadIsAdmin = async () => {
     const { data: u } = await supabase.auth.getUser();
     const user = u.user;
@@ -286,6 +305,7 @@ export default function DashboardPage() {
     setIsAdmin(admin);
   };
 
+  // ---------- Data ----------
   const load = async (silent = false) => {
     if (!silent) setMsg("جاري تحميل البيانات...");
 
@@ -389,6 +409,7 @@ export default function DashboardPage() {
     await loadPending();
   };
 
+  // ✅ dismiss all pending
   const dismissAll = async () => {
     if (pending.length === 0) return;
 
@@ -466,6 +487,7 @@ export default function DashboardPage() {
     loadPending();
   };
 
+  // ✅ Add streamer via API (enforces plan limits)
   const addStreamer = async () => {
     setMsg("جاري الإضافة...");
     if (!username.trim() || !channelUrl.trim()) {
@@ -564,6 +586,7 @@ export default function DashboardPage() {
     setMsg("✅ تم حفظ الإعدادات");
   };
 
+  // ✅ Admin: set plan by email/uuid
   const adminSetPlan = async () => {
     const target = adminTarget.trim();
     if (!target) {
@@ -605,6 +628,7 @@ export default function DashboardPage() {
     setMsg(`✅ Plan updated: ${data.user_id} → ${data.plan} (${data.status}) | limit=${data.plan_limit ?? "?"}`);
   };
 
+  // ✅ تحديث ذكي لستريمر واحد بدل load(true)
   const applyStreamerChange = (payload: any) => {
     const newRow = payload?.new as any;
     const oldRow = payload?.old as any;
@@ -635,14 +659,18 @@ export default function DashboardPage() {
     }
   };
 
+  // Load sound preference once
   useEffect(() => {
     try {
       const v = localStorage.getItem("nexus_sound");
       if (v === "0") setSoundEnabled(false);
       if (v === "1") setSoundEnabled(true);
-    } catch {}
+    } catch {
+      // ignore
+    }
   }, []);
 
+  // 🔔 Update tab title + 🔊 beep on new pending
   useEffect(() => {
     const count = pending.length;
     document.title = count > 0 ? `Nexus (${count})` : "Nexus";
@@ -652,24 +680,28 @@ export default function DashboardPage() {
     lastPendingCountRef.current = count;
   }, [pending.length, soundEnabled]);
 
-  // ✅ Auto-open ALL pending one-by-one with small delay (more reliable)
+  // ✅ AUTO-OPEN: opens new pending automatically (requires popups allowed)
   useEffect(() => {
     if (!autoOpenEnabled) return;
     if (!pending.length) return;
     if (isAutoOpeningRef.current) return;
 
     (async () => {
-      isAutoOpeningRef.current = true;
       try {
+        isAutoOpeningRef.current = true;
+
         const { data: sessionData } = await supabase.auth.getSession();
         const token = sessionData.session?.access_token;
         if (!token) return;
 
+        // افتح فقط العناصر الجديدة اللي ما انفتحت قبل
         const toOpen = pending.filter((n) => !openedAutoRef.current.has(n.id));
-        if (toOpen.length === 0) return;
 
-        // افتح واحدة واحدة عشان المتصفح ما يمنعها
-        for (const n of toOpen) {
+        // (اختياري) حد أقصى لكل دفعة عشان ما يفتح 50 تب مرة وحدة
+        const MAX_OPEN_PER_BATCH = 5;
+        const batch = toOpen.slice(0, MAX_OPEN_PER_BATCH);
+
+        for (const n of batch) {
           const w = window.open(n.streamers.channel_url, "_blank", "noopener,noreferrer");
 
           if (!w) {
@@ -679,6 +711,7 @@ export default function DashboardPage() {
 
           openedAutoRef.current.add(n.id);
 
+          // علّم الإشعار opened عشان ما يرجع pending
           await fetch("/api/auto-open/mark-opened", {
             method: "POST",
             headers: {
@@ -687,12 +720,10 @@ export default function DashboardPage() {
             },
             body: JSON.stringify({ notificationId: n.id, streamerId: n.streamer_id }),
           });
-
-          // تأخير بسيط بين كل تبويب
-          await sleep(300);
         }
 
-        await loadPending();
+        // بعد ما نفتح ونسوي mark-opened نحدث pending
+        if (batch.length > 0) await loadPending();
       } finally {
         isAutoOpeningRef.current = false;
       }
@@ -700,6 +731,7 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, autoOpenEnabled]);
 
+  // ✅ Realtime: open_notifications + streamers
   useEffect(() => {
     (async () => {
       const ok = await checkSubscriptionGate();
@@ -744,6 +776,7 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ✅ Search + Counters + Kick only view
   const q = search.trim().toLowerCase();
   const kickStreamers = streamers.filter((s) => (s.platform ?? "").toLowerCase() === "kick");
 
@@ -768,6 +801,7 @@ export default function DashboardPage() {
   const countOffline = kickStreamers.filter((s) => normalizeStatus(s.last_status) === "offline").length;
   const countUnknown = kickStreamers.filter((s) => normalizeStatus(s.last_status) === "unknown").length;
 
+  // ---------- Render ----------
   return (
     <div style={{ maxWidth: 980, margin: "40px auto", padding: "0 16px", fontFamily: "var(--font-geist-sans), Arial, sans-serif" }}>
       {/* Header */}
@@ -805,7 +839,7 @@ export default function DashboardPage() {
               🔔 New live streams: <span style={{ color: "var(--foreground)" }}>{pending.length}</span>
             </div>
             <div style={{ color: "var(--muted)", fontSize: 12 }}>
-              إذا Auto-Open ON و Pop-ups مسموحة، راح ينفتح تلقائيًا (واحد واحد).
+              إذا Auto-Open ON و Pop-ups مسموحة، راح ينفتح تلقائيًا.
             </div>
           </div>
 
