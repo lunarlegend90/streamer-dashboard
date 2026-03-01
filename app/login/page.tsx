@@ -36,7 +36,7 @@ export default function LoginPage() {
   };
 
   const signIn = async () => {
-    if (!email || !password) {
+    if (!email.trim() || !password.trim()) {
       setMsg("❌ أدخل الإيميل والباسورد");
       return;
     }
@@ -46,7 +46,10 @@ export default function LoginPage() {
     setLoading(true);
     setMsg("جاري تسجيل الدخول...");
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({
+      email: email.trim(),
+      password: password.trim(),
+    });
 
     if (error) {
       setLoading(false);
@@ -59,7 +62,19 @@ export default function LoginPage() {
     const me = u.user;
 
     if (me?.id) {
-      const { data: prof } = await supabase.from("profiles").select("is_approved").eq("id", me.id).maybeSingle();
+      const { data: prof, error: pErr } = await supabase
+        .from("profiles")
+        .select("is_approved")
+        .eq("id", me.id)
+        .maybeSingle();
+
+      if (pErr) {
+        await supabase.auth.signOut();
+        setLoading(false);
+        setMsg(`❌ Profile error: ${pErr.message}`);
+        return;
+      }
+
       if (!prof?.is_approved) {
         await supabase.auth.signOut();
         setLoading(false);
@@ -74,41 +89,20 @@ export default function LoginPage() {
   };
 
   const signUp = async () => {
-    if (!email || !password) {
+    if (!email.trim() || !password.trim()) {
       setMsg("❌ أدخل الإيميل والباسورد");
       return;
     }
-
-    const resetPassword = async () => {
-  if (!email.trim()) {
-    setMsg("❌ اكتب الإيميل أول");
-    return;
-  }
-
-  setLoading(true);
-  setMsg("جاري إرسال رابط تغيير كلمة المرور...");
-
-  // لازم يكون عندك صفحة /reset-password في موقعك (بعطيك كودها بعد)
-  const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-    redirectTo: `${window.location.origin}/reset-password`,
-  });
-
-  setLoading(false);
-
-  if (error) {
-    setMsg(`❌ خطأ: ${error.message}`);
-    return;
-  }
-
-  setMsg("✅ تم إرسال رابط تغيير كلمة المرور على الإيميل");
-};
 
     persistRememberPref();
 
     setLoading(true);
     setMsg("جاري إنشاء الحساب...");
 
-    const { error } = await supabase.auth.signUp({ email, password });
+    const { error } = await supabase.auth.signUp({
+      email: email.trim(),
+      password: password.trim(),
+    });
 
     setLoading(false);
 
@@ -117,9 +111,31 @@ export default function LoginPage() {
       return;
     }
 
-    // user created but pending approval
     setMsg("✅ تم إنشاء الحساب. ⏳ بانتظار موافقة الإدارة.");
     setMode("signin");
+  };
+
+  const resetPassword = async () => {
+    if (!email.trim()) {
+      setMsg("❌ اكتب الإيميل أول");
+      return;
+    }
+
+    setLoading(true);
+    setMsg("جاري إرسال رابط تغيير كلمة المرور...");
+
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+
+    setLoading(false);
+
+    if (error) {
+      setMsg(`❌ خطأ: ${error.message}`);
+      return;
+    }
+
+    setMsg("✅ تم إرسال رابط تغيير كلمة المرور على الإيميل");
   };
 
   const card: React.CSSProperties = {
@@ -253,9 +269,15 @@ export default function LoginPage() {
           </label>
 
           {mode === "signin" ? (
-            <button onClick={signIn} style={btnPrimary} disabled={loading}>
-              Sign In
-            </button>
+            <>
+              <button onClick={signIn} style={btnPrimary} disabled={loading}>
+                Sign In
+              </button>
+
+              <button onClick={resetPassword} style={btnSecondary} disabled={loading}>
+                Forgot password?
+              </button>
+            </>
           ) : (
             <button onClick={signUp} style={btnPrimary} disabled={loading}>
               Create Account
@@ -282,7 +304,7 @@ export default function LoginPage() {
           <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 6, lineHeight: 1.6 }}>
             {mode === "signup"
               ? "بعد إنشاء الحساب، لازم موافقة الإدارة قبل الدخول."
-              : "إذا حسابك جديد، سجّل Sign Up ثم انتظر الموافقة."}
+              : "إذا حسابك جديد، سجّل Sign Up ثم انتظر الموافقة. إذا نسيت كلمة المرور اضغط Forgot password."}
           </div>
         </div>
       </div>
