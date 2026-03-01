@@ -58,6 +58,10 @@ export default function DashboardPage() {
   const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
   const lastPendingCountRef = useRef<number>(0);
 
+  // ✅ Auto-open: prevent duplicate opening
+  const openedAutoRef = useRef<Set<number>>(new Set());
+  const isAutoOpeningRef = useRef<boolean>(false);
+
   // ✅ Admin plan control
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [adminTarget, setAdminTarget] = useState<string>(""); // email OR uuid
@@ -263,7 +267,6 @@ export default function DashboardPage() {
       return false;
     }
 
-    // يثبت الإيميل فوق
     setEmail(user.email ?? "");
 
     const { data, error } = await supabase
@@ -288,14 +291,18 @@ export default function DashboardPage() {
     return true;
   };
 
-  // ✅ check admin
+  // ✅ check admin (supports either is_admin OR role=admin)
   const loadIsAdmin = async () => {
     const { data: u } = await supabase.auth.getUser();
     const user = u.user;
     if (!user) return;
 
-    const { data, error } = await supabase.from("profiles").select("is_admin").eq("id", user.id).maybeSingle();
-    if (!error && data) setIsAdmin(Boolean((data as any).is_admin));
+    const { data, error } = await supabase.from("profiles").select("is_admin,role").eq("id", user.id).maybeSingle();
+    if (error || !data) return;
+
+    const row: any = data;
+    const admin = Boolean(row.is_admin) || String(row.role ?? "").toLowerCase() === "admin";
+    setIsAdmin(admin);
   };
 
   // ---------- Data ----------
@@ -315,7 +322,7 @@ export default function DashboardPage() {
     const { data, error } = await supabase
       .from("streamers")
       .select("id, user_id, platform, username, display_name, channel_url, last_status")
-      .eq("user_id", me.id) // ✅ فقط ستريمرات المستخدم
+      .eq("user_id", me.id)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -673,6 +680,57 @@ export default function DashboardPage() {
     lastPendingCountRef.current = count;
   }, [pending.length, soundEnabled]);
 
+  // ✅ AUTO-OPEN: opens new pending automatically (requires popups allowed)
+  useEffect(() => {
+    if (!autoOpenEnabled) return;
+    if (!pending.length) return;
+    if (isAutoOpeningRef.current) return;
+
+    (async () => {
+      try {
+        isAutoOpeningRef.current = true;
+
+        const { data: sessionData } = await supabase.auth.getSession();
+        const token = sessionData.session?.access_token;
+        if (!token) return;
+
+        // افتح فقط العناصر الجديدة اللي ما انفتحت قبل
+        const toOpen = pending.filter((n) => !openedAutoRef.current.has(n.id));
+
+        // (اختياري) حد أقصى لكل دفعة عشان ما يفتح 50 تب مرة وحدة
+        const MAX_OPEN_PER_BATCH = 5;
+        const batch = toOpen.slice(0, MAX_OPEN_PER_BATCH);
+
+        for (const n of batch) {
+          const w = window.open(n.streamers.channel_url, "_blank", "noopener,noreferrer");
+
+          if (!w) {
+            setMsg("⚠️ المتصفح منع فتح التبويبات تلقائيًا. فعّل Pop-ups لموقع Nexus ثم جرّب مرة ثانية.");
+            return;
+          }
+
+          openedAutoRef.current.add(n.id);
+
+          // علّم الإشعار opened عشان ما يرجع pending
+          await fetch("/api/auto-open/mark-opened", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ notificationId: n.id, streamerId: n.streamer_id }),
+          });
+        }
+
+        // بعد ما نفتح ونسوي mark-opened نحدث pending
+        if (batch.length > 0) await loadPending();
+      } finally {
+        isAutoOpeningRef.current = false;
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, autoOpenEnabled]);
+
   // ✅ Realtime: open_notifications + streamers
   useEffect(() => {
     (async () => {
@@ -684,7 +742,6 @@ export default function DashboardPage() {
       await loadAutoOpenSettings();
       await loadIsAdmin();
 
-      // fetch current user id to filter realtime (best effort)
       const { data: u } = await supabase.auth.getUser();
       const me = u.user;
 
@@ -711,7 +768,6 @@ export default function DashboardPage() {
         )
         .subscribe();
 
-      // cleanup
       return () => {
         supabase.removeChannel(notifsChannel);
         supabase.removeChannel(streamersChannel);
@@ -775,7 +831,7 @@ export default function DashboardPage() {
         <div style={{ fontSize: 13, color: msg ? "var(--foreground)" : "var(--muted)" }}>{msg || "—"}</div>
       </div>
 
-      {/* 🔔 Banner if pending */}
+      {/* Banner if pending */}
       {pending.length > 0 && (
         <div style={{ ...styles.banner, marginTop: 14 }}>
           <div style={{ display: "grid", gap: 2 }}>
@@ -783,7 +839,7 @@ export default function DashboardPage() {
               🔔 New live streams: <span style={{ color: "var(--foreground)" }}>{pending.length}</span>
             </div>
             <div style={{ color: "var(--muted)", fontSize: 12 }}>
-              Open them الآن أو سوِ Dismiss — العنوان في التبويب يتحدث تلقائيًا.
+              إذا Auto-Open ON و Pop-ups مسموحة، راح ينفتح تلقائيًا.
             </div>
           </div>
 
@@ -847,7 +903,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* ✅ Admin Card */}
+      {/* Admin Card */}
       {isAdmin && (
         <div style={{ ...styles.card, marginTop: 16 }}>
           <h2 style={styles.sectionTitle}>Admin: Set User Plan</h2>
