@@ -277,39 +277,59 @@ export default function DashboardPage() {
     }
   };
 
-  // ✅ Subscription gate: redirect non-subscribed → /billing
-  const checkSubscriptionGate = async () => {
-    const { data: u } = await supabase.auth.getUser();
-    const user = u.user;
+  // ✅ Subscription + Approval gate: redirect non-approved → /login
+const checkSubscriptionGate = async () => {
+  const { data: u } = await supabase.auth.getUser();
+  const user = u.user;
 
-    if (!user) {
+  if (!user) {
+    window.location.href = "/login";
+    return false;
+  }
+
+  setEmail(user.email ?? "");
+
+  // ✅ 1) approval check
+  const { data: prof, error: pErr } = await supabase
+    .from("profiles")
+    .select("is_approved")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (pErr) {
+    setMsg(`⚠️ Profile check error: ${pErr.message}`);
+    // نسمح مؤقتًا بدل ما نحبسه بسبب خطأ
+  } else {
+    const approved = Boolean((prof as any)?.is_approved);
+    if (!approved) {
+      await supabase.auth.signOut();
       window.location.href = "/login";
       return false;
     }
+  }
 
-    setEmail(user.email ?? "");
+  // ✅ 2) subscription check
+  const { data, error } = await supabase
+    .from("subscriptions")
+    .select("status,current_period_end")
+    .eq("user_id", user.id)
+    .maybeSingle();
 
-    const { data, error } = await supabase
-      .from("subscriptions")
-      .select("status,current_period_end")
-      .eq("user_id", user.id)
-      .maybeSingle();
-
-    if (error) {
-      setMsg(`⚠️ Subscription check error: ${error.message}`);
-      return true;
-    }
-
-    const row = (data as SubRow | null) ?? null;
-    const st = (row?.status ?? "inactive").toLowerCase();
-
-    if (st !== "active" && st !== "trialing") {
-      window.location.href = "/billing";
-      return false;
-    }
-
+  if (error) {
+    setMsg(`⚠️ Subscription check error: ${error.message}`);
     return true;
-  };
+  }
+
+  const row = (data as SubRow | null) ?? null;
+  const st = (row?.status ?? "inactive").toLowerCase();
+
+  if (st !== "active" && st !== "trialing") {
+    window.location.href = "/billing";
+    return false;
+  }
+
+  return true;
+};
 
   // ✅ check admin (supports either is_admin OR role=admin)
   const loadIsAdmin = async () => {
