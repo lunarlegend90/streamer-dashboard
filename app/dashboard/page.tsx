@@ -449,9 +449,8 @@ const openAllOnlineNow = () => {
 
   if (isOpeningOnlineRef.current) return;
 
-  // ✅ Unique by username (strongest)
-  const seenUser = new Set<string>();
-
+  // ✅ Unique by username/url
+  const seen = new Set<string>();
   const unique = online
     .map((s) => {
       const uname = String(s.username ?? "")
@@ -461,15 +460,13 @@ const openAllOnlineNow = () => {
         .toLowerCase();
 
       const url = uname ? `https://kick.com/${uname}` : String(s.channel_url ?? "").trim();
-
-      return { s, uname, url };
+      return { uname, url };
     })
     .filter(({ uname, url }) => {
-      if (!url) return false;
-      // لو username فاضي، ما نقدر نضمن uniqueness — نخليه يمر لكن غالبًا بياناته غلط
       const key = uname || url;
-      if (seenUser.has(key)) return false;
-      seenUser.add(key);
+      if (!key) return false;
+      if (seen.has(key)) return false;
+      seen.add(key);
       return true;
     });
 
@@ -479,27 +476,30 @@ const openAllOnlineNow = () => {
   isOpeningOnlineRef.current = true;
 
   try {
-    // ✅ Debug: اعرض لك أول كم واحد بينفتح
-    const preview = unique
-      .slice(0, 8)
-      .map((x) => x.uname || x.url)
-      .join(" | ");
+    // ✅ 1) open blank tabs WITHOUT noopener/noreferrer so we can navigate them
+    const wins: Window[] = [];
+    let blocked = 0;
 
-    setMsg(`🚀 Opening: ${preview}${unique.length > 8 ? " ..." : ""}`);
-
-    let opened = 0;
-
-    // ✅ ALWAYS open new tab
-    for (const { url } of unique) {
-      const w = window.open(url, "_blank", "noopener,noreferrer");
-      if (!w) {
-        setMsg("⚠️ المتصفح منع فتح التبويبات. فعّل Pop-ups لموقع Nexus (Allow) ثم جرّب مرة ثانية.");
-        break;
-      }
-      opened++;
+    for (let i = 0; i < unique.length; i++) {
+      const w = window.open("", "_blank"); // <-- no features
+      if (!w) blocked++;
+      else wins.push(w);
     }
 
-    setMsg(`✅ تم فتح ${opened} / ${unique.length} تبويب (ONLINE)`);
+    // ✅ 2) navigate each tab to the correct kick URL
+    for (let i = 0; i < wins.length; i++) {
+      try {
+        wins[i].location.replace(unique[i].url); // better than href
+      } catch {
+        // ignore
+      }
+    }
+
+    if (blocked > 0) {
+      setMsg(`⚠️ تم فتح ${wins.length}/${unique.length}. المتصفح منع ${blocked} تبويب. فعّل Pop-ups للموقع.`);
+    } else {
+      setMsg(`✅ تم فتح ${wins.length}/${unique.length} تبويب (ONLINE)`);
+    }
   } finally {
     setTimeout(() => {
       isOpeningOnlineRef.current = false;
