@@ -71,7 +71,7 @@ export default function DashboardPage() {
   // ✅ Open All guard (prevents double click)
   const isOpeningAllRef = useRef<boolean>(false);
 
-  // ✅ NEW: Open Online guard (prevents double click)
+  // ✅ Open Online guard (prevents double click)
   const isOpeningOnlineRef = useRef<boolean>(false);
 
   const normalizeStatus = (s: string) => (s ?? "unknown").toLowerCase();
@@ -436,106 +436,102 @@ export default function DashboardPage() {
     }
   };
 
- // ✅ NEW: Open ALL ONLINE Kick streamers (separate tabs) - FIXED (no duplicates)
-const openAllOnlineNow = () => {
-  // اجمع online فقط
-  const online = streamers
-    .filter((s) => (s.platform ?? "").toLowerCase() === "kick")
-    .filter((s) => normalizeStatus(s.last_status) === "online");
+  // ✅ Open ALL ONLINE Kick streamers (separate tabs) - NO duplicates + canonical URL
+  const openAllOnlineNow = () => {
+    const online = streamers
+      .filter((s) => (s.platform ?? "").toLowerCase() === "kick")
+      .filter((s) => normalizeStatus(s.last_status) === "online");
 
-  if (online.length === 0) {
-    setMsg("لا يوجد ستريمرز Online حاليا.");
-    return;
-  }
+    if (online.length === 0) {
+      setMsg("لا يوجد ستريمرز Online حاليا.");
+      return;
+    }
 
-  if (isOpeningOnlineRef.current) return;
+    if (isOpeningOnlineRef.current) return;
 
-  // ✅ ابنِ رابط Kick من username (أضمن من channel_url لو كان مخزن غلط)
-  const buildKickUrl = (s: Streamer) => {
-    const uname = (s.username ?? "").trim().replace(/^\/+/, "");
-    if (uname) return `https://kick.com/${uname}`;
-    return (s.channel_url ?? "").trim();
+    const buildKickUrl = (s: Streamer) => {
+      const uname = (s.username ?? "").trim().replace(/^@+/, "").replace(/^\/+/, "");
+      if (uname) return `https://kick.com/${uname}`;
+      return (s.channel_url ?? "").trim();
+    };
+
+    const seen = new Set<string>();
+    const unique = online
+      .map((s) => ({ s, url: buildKickUrl(s) }))
+      .filter(({ url }) => {
+        const clean = (url ?? "").trim();
+        if (!clean) return false;
+        if (seen.has(clean)) return false;
+        seen.add(clean);
+        return true;
+      });
+
+    if (unique.length === 0) {
+      setMsg("⚠️ ما قدرت أطلع روابط صحيحة للستريمرز Online.");
+      return;
+    }
+
+    const yes = confirm(`Open ONLINE (${unique.length}) الآن؟`);
+    if (!yes) return;
+
+    isOpeningOnlineRef.current = true;
+
+    try {
+      let opened = 0;
+
+      for (const { s, url } of unique) {
+        const windowName = `nexus_${s.id}`;
+        const w = window.open(url, windowName, "noopener,noreferrer");
+        if (!w) {
+          setMsg("⚠️ المتصفح منع فتح التبويبات. فعّل Pop-ups لموقع Nexus (Allow) ثم جرّب مرة ثانية.");
+          break;
+        }
+        opened++;
+      }
+
+      if (unique.length < online.length) {
+        setMsg(`✅ تم فتح ${opened} تبويب (تم تجاهل ${online.length - unique.length} روابط مكررة/غير صالحة).`);
+      } else {
+        setMsg(`✅ تم فتح ${opened} / ${unique.length} (ONLINE)`);
+      }
+    } finally {
+      setTimeout(() => {
+        isOpeningOnlineRef.current = false;
+      }, 800);
+    }
   };
 
-  // ✅ Dedup by URL
-  const seen = new Set<string>();
-  const unique = online
-    .map((s) => ({ s, url: buildKickUrl(s) }))
-    .filter(({ url }) => {
-      const clean = (url ?? "").trim();
-      if (!clean) return false;
-      if (seen.has(clean)) return false;
-      seen.add(clean);
-      return true;
-    });
+  // ✅ Admin: Fix all stored kick URLs (requires /api/admin/fix-kick-urls)
+  const adminFixKickUrls = async () => {
+    const yes = confirm("Fix all Kick channel URLs الآن؟ (Admin only)");
+    if (!yes) return;
 
-  if (unique.length === 0) {
-    setMsg("⚠️ ما قدرت أطلع روابط صحيحة للستريمرز Online.");
-    return;
-  }
+    setMsg("جاري إصلاح روابط Kick...");
 
-  const yes = confirm(`Open ONLINE (${unique.length}) الآن؟`);
-  if (!yes) return;
-
-  isOpeningOnlineRef.current = true;
-
-  try {
-    let opened = 0;
-
-    for (const { s, url } of unique) {
-      // ✅ اسم نافذة فريد لكل ستريمر (يمنع إعادة استخدام نفس التبويب لنفس الستريمر)
-      const windowName = `nexus_${s.id}`;
-
-      const w = window.open(url, windowName, "noopener,noreferrer");
-      if (!w) {
-        setMsg("⚠️ المتصفح منع فتح التبويبات. فعّل Pop-ups لموقع Nexus (Allow) ثم جرّب مرة ثانية.");
-        break;
-      }
-      opened++;
-    }
-
-    // لو كان عندك 5 Online لكن unique أقل، معناه عندك روابط مكررة/غلط في البيانات
-    if (unique.length < online.length) {
-      setMsg(`✅ تم فتح ${opened} تبويب (تم تجاهل ${online.length - unique.length} روابط مكررة/غير صالحة).`);
-    } else {
-      setMsg(`✅ تم فتح ${opened} / ${unique.length} (ONLINE)`);
-    }
-  } finally {
-    setTimeout(() => {
-      isOpeningOnlineRef.current = false;
-    }, 800);
-  }
-};
-
-  const dismissNow = async (n: PendingNotif) => {
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData.session?.access_token;
 
     if (!token) {
-      setMsg("❌ لا يوجد تسجيل دخول. ارجع لصفحة login.");
+      setMsg("❌ لا يوجد تسجيل دخول.");
       return;
     }
 
-    const res = await fetch("/api/auto-open/mark-dismissed", {
+    const res = await fetch("/api/admin/fix-kick-urls", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ notificationId: n.id }),
+      headers: { Authorization: `Bearer ${token}` },
     });
 
     const data = await res.json().catch(() => ({}));
 
     if (!res.ok || !data.ok) {
-      setMsg(`❌ Dismiss error: ${data.error ?? res.status}`);
+      setMsg(`❌ Fix error: ${data.error ?? res.status}`);
       return;
     }
 
-    await loadPending();
+    setMsg(`✅ Fixed URLs: updated=${data.updated} | skipped=${data.skipped} | checked=${data.checked}`);
+    await load(true);
   };
 
-  // ✅ dismiss all pending
   const dismissAll = async () => {
     if (pending.length === 0) return;
 
@@ -1080,6 +1076,10 @@ const openAllOnlineNow = () => {
                 Apply Plan
               </button>
 
+              <button style={styles.btnSecondary} onClick={adminFixKickUrls} title="Fix Kick URLs">
+                Fix Kick URLs
+              </button>
+
               <button
                 style={styles.btnSecondary}
                 onClick={async () => {
@@ -1173,7 +1173,6 @@ const openAllOnlineNow = () => {
             Unknown
           </button>
 
-          {/* ✅ NEW: Open Online */}
           <button style={styles.btnPrimary} onClick={openAllOnlineNow} title="Open all ONLINE channels">
             Open Online
           </button>
