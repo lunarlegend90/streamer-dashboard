@@ -33,6 +33,15 @@ type SubRow = {
   current_period_end: string | null;
 };
 
+type PendingUser = {
+  id: string;
+  email: string | null;
+  is_approved: boolean;
+  approved_at: string | null;
+  role: string | null;
+  is_admin: boolean;
+};
+
 export default function DashboardPage() {
   const [email, setEmail] = useState<string>("");
   const [streamers, setStreamers] = useState<Streamer[]>([]);
@@ -67,6 +76,11 @@ export default function DashboardPage() {
   const [adminTarget, setAdminTarget] = useState<string>(""); // email OR uuid
   const [adminPlan, setAdminPlan] = useState<"standard" | "elite" | "plus" | "pro">("standard");
   const [adminStatus, setAdminStatus] = useState<"free" | "active" | "trialing">("active");
+
+  // ✅ Admin approvals
+  const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
+  const [pendingUsersLoading, setPendingUsersLoading] = useState<boolean>(false);
+  const approvingRef = useRef<Set<string>>(new Set());
 
   // ✅ Open All guard (prevents double click)
   const isOpeningAllRef = useRef<boolean>(false);
@@ -364,6 +378,151 @@ export default function DashboardPage() {
     setPending(data.items ?? []);
   };
 
+  // ✅ Admin: load pending users
+  const loadPendingUsers = async () => {
+    if (!isAdmin) return;
+
+    setPendingUsersLoading(true);
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+
+      if (!token) {
+        setPendingUsers([]);
+        setMsg("❌ لا يوجد تسجيل دخول.");
+        return;
+      }
+
+      const res = await fetch("/api/admin/users/pending", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || !data.ok) {
+        setMsg(`❌ Pending users error: ${data.error ?? res.status}`);
+        setPendingUsers([]);
+        return;
+      }
+
+      setPendingUsers((data.items ?? []) as PendingUser[]);
+    } finally {
+      setPendingUsersLoading(false);
+    }
+  };
+
+  // ✅ Admin: approve one user
+  const approveUser = async (userId: string) => {
+    if (!isAdmin) return;
+    if (!userId) return;
+    if (approvingRef.current.has(userId)) return;
+
+    const yes = confirm("Approve this user?");
+    if (!yes) return;
+
+    approvingRef.current.add(userId);
+    try {
+      setMsg("جاري الموافقة على المستخدم...");
+
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+
+      if (!token) {
+        setMsg("❌ لا يوجد تسجيل دخول.");
+        return;
+      }
+
+      const res = await fetch("/api/admin/users/approve", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ user_id: userId }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || !data.ok) {
+        setMsg(`❌ Approve error: ${data.error ?? res.status}`);
+        return;
+      }
+
+      setMsg(`✅ Approved: ${userId}`);
+      await loadPendingUsers();
+    } finally {
+      approvingRef.current.delete(userId);
+    }
+  };
+
+  // ✅ Open ALL ONLINE Kick streamers (separate tabs)
+  const openAllOnlineNow = () => {
+    const online = streamers
+      .filter((s) => (s.platform ?? "").toLowerCase() === "kick")
+      .filter((s) => normalizeStatus(s.last_status) === "online");
+
+    if (online.length === 0) {
+      setMsg("لا يوجد ستريمرز Online حاليا.");
+      return;
+    }
+
+    if (isOpeningOnlineRef.current) return;
+
+    const seen = new Set<string>();
+    const unique = online
+      .map((s) => {
+        const uname = String(s.username ?? "")
+          .trim()
+          .replace(/^@+/, "")
+          .replace(/^\/+/, "")
+          .toLowerCase();
+
+        const url = uname ? `https://kick.com/${uname}` : String(s.channel_url ?? "").trim();
+        return { uname, url };
+      })
+      .filter(({ uname, url }) => {
+        const key = uname || url;
+        if (!key) return false;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+    const yes = confirm(`Open ONLINE (${unique.length}) الآن؟`);
+    if (!yes) return;
+
+    isOpeningOnlineRef.current = true;
+
+    try {
+      const wins: Window[] = [];
+      let blocked = 0;
+
+      for (let i = 0; i < unique.length; i++) {
+        const w = window.open("", "_blank");
+        if (!w) blocked++;
+        else wins.push(w);
+      }
+
+      for (let i = 0; i < wins.length; i++) {
+        try {
+          wins[i].location.replace(unique[i].url);
+        } catch {
+          // ignore
+        }
+      }
+
+      if (blocked > 0) {
+        setMsg(`⚠️ تم فتح ${wins.length}/${unique.length}. المتصفح منع ${blocked} تبويب. فعّل Pop-ups للموقع.`);
+      } else {
+        setMsg(`✅ تم فتح ${wins.length}/${unique.length} تبويب (ONLINE)`);
+      }
+    } finally {
+      setTimeout(() => {
+        isOpeningOnlineRef.current = false;
+      }, 800);
+    }
+  };
+
   const openNow = async (n: PendingNotif) => {
     const { data: sessionData } = await supabase.auth.getSession();
     const token = sessionData.session?.access_token;
@@ -387,7 +546,7 @@ export default function DashboardPage() {
     await loadPending();
   };
 
-  // ✅ NEW: Open All (Guaranteed by user click)
+  // ✅ Open All (Guaranteed by user click)
   const openAllNow = async () => {
     if (pending.length === 0) {
       setMsg("لا يوجد تنبيهات حاليا.");
@@ -435,77 +594,6 @@ export default function DashboardPage() {
       isOpeningAllRef.current = false;
     }
   };
-
-  // ✅ Open ALL ONLINE Kick streamers (separate tabs) - FINAL FIX (no repeats)
-const openAllOnlineNow = () => {
-  const online = streamers
-    .filter((s) => (s.platform ?? "").toLowerCase() === "kick")
-    .filter((s) => normalizeStatus(s.last_status) === "online");
-
-  if (online.length === 0) {
-    setMsg("لا يوجد ستريمرز Online حاليا.");
-    return;
-  }
-
-  if (isOpeningOnlineRef.current) return;
-
-  // ✅ Unique by username/url
-  const seen = new Set<string>();
-  const unique = online
-    .map((s) => {
-      const uname = String(s.username ?? "")
-        .trim()
-        .replace(/^@+/, "")
-        .replace(/^\/+/, "")
-        .toLowerCase();
-
-      const url = uname ? `https://kick.com/${uname}` : String(s.channel_url ?? "").trim();
-      return { uname, url };
-    })
-    .filter(({ uname, url }) => {
-      const key = uname || url;
-      if (!key) return false;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-
-  const yes = confirm(`Open ONLINE (${unique.length}) الآن؟`);
-  if (!yes) return;
-
-  isOpeningOnlineRef.current = true;
-
-  try {
-    // ✅ 1) open blank tabs WITHOUT noopener/noreferrer so we can navigate them
-    const wins: Window[] = [];
-    let blocked = 0;
-
-    for (let i = 0; i < unique.length; i++) {
-      const w = window.open("", "_blank"); // <-- no features
-      if (!w) blocked++;
-      else wins.push(w);
-    }
-
-    // ✅ 2) navigate each tab to the correct kick URL
-    for (let i = 0; i < wins.length; i++) {
-      try {
-        wins[i].location.replace(unique[i].url); // better than href
-      } catch {
-        // ignore
-      }
-    }
-
-    if (blocked > 0) {
-      setMsg(`⚠️ تم فتح ${wins.length}/${unique.length}. المتصفح منع ${blocked} تبويب. فعّل Pop-ups للموقع.`);
-    } else {
-      setMsg(`✅ تم فتح ${wins.length}/${unique.length} تبويب (ONLINE)`);
-    }
-  } finally {
-    setTimeout(() => {
-      isOpeningOnlineRef.current = false;
-    }, 800);
-  }
-};
 
   // ✅ Admin: Fix all stored kick URLs (requires /api/admin/fix-kick-urls)
   const adminFixKickUrls = async () => {
@@ -808,6 +896,12 @@ const openAllOnlineNow = () => {
     lastPendingCountRef.current = count;
   }, [pending.length, soundEnabled]);
 
+  // ✅ When isAdmin becomes true, load pending users automatically
+  useEffect(() => {
+    if (isAdmin) void loadPendingUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
+
   // ✅ AUTO-OPEN: opens new pending automatically (requires popups allowed)
   useEffect(() => {
     if (!autoOpenEnabled) return;
@@ -1031,6 +1125,54 @@ const openAllOnlineNow = () => {
         </div>
       </div>
 
+      {/* Admin: Pending Signups */}
+      {isAdmin && (
+        <div style={{ ...styles.card, marginTop: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <h2 style={styles.sectionTitle}>Admin: Pending Signups</h2>
+            <button style={styles.btnSecondary} onClick={loadPendingUsers} disabled={pendingUsersLoading}>
+              {pendingUsersLoading ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+
+          {pendingUsers.length === 0 ? (
+            <div style={{ color: "var(--muted)", fontSize: 13 }}>لا يوجد طلبات جديدة.</div>
+          ) : (
+            <div style={{ display: "grid", gap: 10 }}>
+              {pendingUsers.map((u) => (
+                <div key={u.id} style={{ ...styles.card, padding: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ display: "grid", gap: 4 }}>
+                      <div style={{ fontWeight: 900 }}>
+                        {u.email ?? "(no email)"}{" "}
+                        <span style={{ color: "var(--muted)", fontWeight: 600, fontSize: 12 }}>({u.id})</span>
+                      </div>
+                      <div style={{ color: "var(--muted)", fontSize: 12 }}>
+                        Approved: <b style={{ color: "var(--foreground)" }}>{String(u.is_approved)}</b>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <button
+                        style={styles.btnPrimary}
+                        onClick={() => approveUser(u.id)}
+                        disabled={approvingRef.current.has(u.id)}
+                      >
+                        {approvingRef.current.has(u.id) ? "Approving..." : "Approve"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 10, lineHeight: 1.6 }}>
+            أي مستخدم يسوي Sign Up بيظهر هنا (Pending). اضغط Approve عشان تفعّل دخوله.
+          </div>
+        </div>
+      )}
+
       {/* Admin Card */}
       {isAdmin && (
         <div style={{ ...styles.card, marginTop: 16 }}>
@@ -1039,7 +1181,12 @@ const openAllOnlineNow = () => {
           <div style={{ display: "grid", gap: 10 }}>
             <label style={styles.label}>
               <span style={{ color: "var(--muted)", fontSize: 13 }}>Target (User ID or Email)</span>
-              <input value={adminTarget} onChange={(e) => setAdminTarget(e.target.value)} style={styles.input} placeholder="UUID أو email@example.com" />
+              <input
+                value={adminTarget}
+                onChange={(e) => setAdminTarget(e.target.value)}
+                style={styles.input}
+                placeholder="UUID أو email@example.com"
+              />
             </label>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>

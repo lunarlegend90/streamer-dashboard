@@ -3,64 +3,36 @@
 import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabaseClient";
 
-const DISCORD_INVITE_URL = "https://discord.gg/PqCMCgH7";
-
-// Keys used by supabase-js in storage
-const SB_STORAGE_KEY = "sb-" + (process.env.NEXT_PUBLIC_SUPABASE_URL ?? "")?.replace(/^https?:\/\//, "").replace(/\W+/g, "") + "-auth-token";
 const REMEMBER_KEY = "nexus_remember_me";
 
 export default function LoginPage() {
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
 
-  // ✅ Remember me + show password
   const [rememberMe, setRememberMe] = useState(true);
   const [showPass, setShowPass] = useState(false);
 
-  // Load remember preference + handle existing session
   useEffect(() => {
     try {
       const v = localStorage.getItem(REMEMBER_KEY);
       if (v === "0") setRememberMe(false);
       if (v === "1") setRememberMe(true);
-    } catch {
-      // ignore
-    }
+    } catch {}
 
     (async () => {
-      // If user already logged in → go dashboard
       const { data } = await supabase.auth.getUser();
       if (data.user) window.location.href = "/dashboard";
     })();
   }, []);
 
-  const persistSessionBasedOnRemember = async () => {
-    // After login, Supabase is usually persisted in localStorage.
-    // If rememberMe=false → move token to sessionStorage and clear localStorage copy.
+  const persistRememberPref = () => {
     try {
-      // Try to detect the actual storage key in localStorage (supabase may name it differently)
-      const keys = Object.keys(localStorage);
-      const sbKey =
-        keys.find((k) => k.includes("supabase") && k.includes("auth-token")) ||
-        keys.find((k) => k.endsWith("-auth-token")) ||
-        SB_STORAGE_KEY;
-
-      const tokenStr = localStorage.getItem(sbKey);
-      if (!tokenStr) return;
-
-      if (!rememberMe) {
-        sessionStorage.setItem(sbKey, tokenStr);
-        localStorage.removeItem(sbKey);
-      } else {
-        // Ensure it stays in localStorage
-        // (Optional) remove any sessionStorage copy to avoid confusion
-        sessionStorage.removeItem(sbKey);
-      }
-    } catch {
-      // ignore
-    }
+      localStorage.setItem(REMEMBER_KEY, rememberMe ? "1" : "0");
+    } catch {}
   };
 
   const signIn = async () => {
@@ -68,13 +40,11 @@ export default function LoginPage() {
       setMsg("❌ أدخل الإيميل والباسورد");
       return;
     }
+
+    persistRememberPref();
+
     setLoading(true);
     setMsg("جاري تسجيل الدخول...");
-
-    // Save remember preference
-    try {
-      localStorage.setItem(REMEMBER_KEY, rememberMe ? "1" : "0");
-    } catch {}
 
     const { error } = await supabase.auth.signInWithPassword({ email, password });
 
@@ -84,16 +54,48 @@ export default function LoginPage() {
       return;
     }
 
-    // Apply remember/session-only behavior
-    await persistSessionBasedOnRemember();
+    // ✅ check approval before redirect
+    const { data: u } = await supabase.auth.getUser();
+    const me = u.user;
+
+    if (me?.id) {
+      const { data: prof } = await supabase.from("profiles").select("is_approved").eq("id", me.id).maybeSingle();
+      if (!prof?.is_approved) {
+        await supabase.auth.signOut();
+        setLoading(false);
+        setMsg("⏳ حسابك بانتظار موافقة الإدارة. حاول لاحقًا.");
+        return;
+      }
+    }
 
     setLoading(false);
     setMsg("✅ تم تسجيل الدخول");
     window.location.href = "/dashboard";
   };
 
-  const requestAccess = () => {
-    window.open(DISCORD_INVITE_URL, "_blank", "noopener,noreferrer");
+  const signUp = async () => {
+    if (!email || !password) {
+      setMsg("❌ أدخل الإيميل والباسورد");
+      return;
+    }
+
+    persistRememberPref();
+
+    setLoading(true);
+    setMsg("جاري إنشاء الحساب...");
+
+    const { error } = await supabase.auth.signUp({ email, password });
+
+    setLoading(false);
+
+    if (error) {
+      setMsg(`❌ خطأ: ${error.message}`);
+      return;
+    }
+
+    // user created but pending approval
+    setMsg("✅ تم إنشاء الحساب. ⏳ بانتظار موافقة الإدارة.");
+    setMode("signin");
   };
 
   const card: React.CSSProperties = {
@@ -138,25 +140,10 @@ export default function LoginPage() {
     boxShadow: "0 0 0 1px rgba(42,168,255,0.10), 0 12px 30px rgba(42,168,255,0.10)",
   };
 
-  const btnDiscord: React.CSSProperties = {
+  const btnSecondary: React.CSSProperties = {
     ...btnBase,
-    border: "1px solid rgba(255,106,0,0.35)",
-    background:
-      "linear-gradient(135deg, rgba(255,106,0,0.22) 0%, rgba(255,177,74,0.10) 60%, rgba(255,255,255,0.06) 100%)",
-    boxShadow: "0 0 0 1px rgba(255,106,0,0.10), 0 12px 30px rgba(255,106,0,0.10)",
-  };
-
-  const row: React.CSSProperties = { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 };
-
-  const smallBtn: React.CSSProperties = {
+    width: "auto",
     padding: "10px 12px",
-    borderRadius: 12,
-    border: "1px solid rgba(255,255,255,0.14)",
-    background: "rgba(255,255,255,0.06)",
-    color: "var(--foreground)",
-    cursor: "pointer",
-    fontWeight: 800,
-    whiteSpace: "nowrap",
   };
 
   return (
@@ -167,10 +154,29 @@ export default function LoginPage() {
             <span style={{ color: "var(--nexus-fire)" }}>N</span>
             <span style={{ color: "var(--foreground)" }}>exus</span>
           </h1>
-          <div style={{ color: "var(--muted)", fontSize: 13 }}>Sign in to access your dashboard</div>
+          <div style={{ color: "var(--muted)", fontSize: 13 }}>
+            {mode === "signin" ? "Sign in to access your dashboard" : "Create an account (Pending approval)"}
+          </div>
         </div>
 
         <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button
+              style={mode === "signin" ? btnPrimary : btnSecondary}
+              onClick={() => setMode("signin")}
+              disabled={loading}
+            >
+              Sign In
+            </button>
+            <button
+              style={mode === "signup" ? btnPrimary : btnSecondary}
+              onClick={() => setMode("signup")}
+              disabled={loading}
+            >
+              Sign Up
+            </button>
+          </div>
+
           <label style={{ display: "grid", gap: 6 }}>
             <span style={{ color: "var(--muted)", fontSize: 13 }}>Email</span>
             <input
@@ -187,30 +193,28 @@ export default function LoginPage() {
           <label style={{ display: "grid", gap: 6 }}>
             <span style={{ color: "var(--muted)", fontSize: 13 }}>Password</span>
 
-            <div style={row}>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
               <input
-                style={{ ...input, marginTop: 0 }}
+                style={{ ...input, marginTop: 0, flex: 1 }}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 type={showPass ? "text" : "password"}
                 placeholder="********"
-                autoComplete="current-password"
+                autoComplete={mode === "signin" ? "current-password" : "new-password"}
                 disabled={loading}
               />
 
               <button
                 type="button"
                 onClick={() => setShowPass((v) => !v)}
-                style={smallBtn}
+                style={btnSecondary}
                 disabled={loading}
-                title="Show/Hide password"
               >
                 {showPass ? "Hide" : "Show"}
               </button>
             </div>
           </label>
 
-          {/* ✅ Remember me */}
           <label style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 2 }}>
             <input
               type="checkbox"
@@ -224,13 +228,15 @@ export default function LoginPage() {
             </span>
           </label>
 
-          <button onClick={signIn} style={btnPrimary} disabled={loading}>
-            Sign In
-          </button>
-
-          <button onClick={requestAccess} style={btnDiscord} disabled={loading}>
-            Request Access (Discord)
-          </button>
+          {mode === "signin" ? (
+            <button onClick={signIn} style={btnPrimary} disabled={loading}>
+              Sign In
+            </button>
+          ) : (
+            <button onClick={signUp} style={btnPrimary} disabled={loading}>
+              Create Account
+            </button>
+          )}
 
           <div
             style={{
@@ -250,7 +256,9 @@ export default function LoginPage() {
           </div>
 
           <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 6, lineHeight: 1.6 }}>
-            التسجيل مغلق — اضغط <b>Request Access</b> واطلب التفعيل عبر الديسكورد.
+            {mode === "signup"
+              ? "بعد إنشاء الحساب، لازم موافقة الإدارة قبل الدخول."
+              : "إذا حسابك جديد، سجّل Sign Up ثم انتظر الموافقة."}
           </div>
         </div>
       </div>
