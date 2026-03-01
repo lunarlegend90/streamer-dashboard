@@ -68,6 +68,9 @@ export default function DashboardPage() {
   const [adminPlan, setAdminPlan] = useState<"standard" | "elite" | "plus" | "pro">("standard");
   const [adminStatus, setAdminStatus] = useState<"free" | "active" | "trialing">("active");
 
+  // ✅ Open All guard (prevents double click)
+  const isOpeningAllRef = useRef<boolean>(false);
+
   const normalizeStatus = (s: string) => (s ?? "unknown").toLowerCase();
   const statusRank: Record<string, number> = { online: 0, offline: 1, unknown: 2 };
 
@@ -379,6 +382,58 @@ export default function DashboardPage() {
     });
 
     await loadPending();
+  };
+
+  // ✅ NEW: Open All (Guaranteed by user click)
+  const openAllNow = async () => {
+    if (pending.length === 0) {
+      setMsg("لا يوجد تنبيهات حاليا.");
+      return;
+    }
+    if (isOpeningAllRef.current) return;
+
+    const yes = confirm(`Open ALL (${pending.length}) streams الآن؟`);
+    if (!yes) return;
+
+    isOpeningAllRef.current = true;
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      const token = sessionData.session?.access_token;
+
+      if (!token) {
+        setMsg("❌ لا يوجد تسجيل دخول. ارجع لصفحة login.");
+        return;
+      }
+
+      let opened = 0;
+
+      // مهم: فتح التبويبات لازم يكون مباشرة بعد ضغط الزر.
+      // عشان كذا ما نحط await/timeout بين window.open كثير.
+      for (const n of pending) {
+        const w = window.open(n.streamers.channel_url, "_blank", "noopener,noreferrer");
+        if (!w) {
+          setMsg("⚠️ المتصفح منع فتح بعض التبويبات. فعّل Pop-ups لموقع Nexus (Allow) ثم جرّب مرة ثانية.");
+          break;
+        }
+
+        opened++;
+
+        // علّم opened عشان تختفي من pending
+        await fetch("/api/auto-open/mark-opened", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ notificationId: n.id, streamerId: n.streamer_id }),
+        });
+      }
+
+      setMsg(`✅ تم فتح ${opened} / ${pending.length} تبويب`);
+      await loadPending();
+    } finally {
+      isOpeningAllRef.current = false;
+    }
   };
 
   const dismissNow = async (n: PendingNotif) => {
@@ -858,6 +913,11 @@ export default function DashboardPage() {
               {soundEnabled ? "🔊 Sound: ON" : "🔇 Sound: OFF"}
             </button>
 
+            {/* ✅ NEW: Open ALL (user click = allows opening all tabs) */}
+            <button style={styles.btnPrimary} onClick={openAllNow} title="Open all pending streams">
+              Open All
+            </button>
+
             <button style={styles.btnDanger} onClick={dismissAll}>
               Dismiss All
             </button>
@@ -911,12 +971,7 @@ export default function DashboardPage() {
           <div style={{ display: "grid", gap: 10 }}>
             <label style={styles.label}>
               <span style={{ color: "var(--muted)", fontSize: 13 }}>Target (User ID or Email)</span>
-              <input
-                value={adminTarget}
-                onChange={(e) => setAdminTarget(e.target.value)}
-                style={styles.input}
-                placeholder="UUID أو email@example.com"
-              />
+              <input value={adminTarget} onChange={(e) => setAdminTarget(e.target.value)} style={styles.input} placeholder="UUID أو email@example.com" />
             </label>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -1025,12 +1080,7 @@ export default function DashboardPage() {
         <h2 style={{ margin: "0 0 10px 0", fontSize: 18 }}>Streamers (Kick)</h2>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by name/username..."
-            style={{ ...styles.input, minWidth: 260, maxWidth: 360 }}
-          />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name/username..." style={{ ...styles.input, minWidth: 260, maxWidth: 360 }} />
 
           <span style={styles.chip}>
             Online: <b>{countOnline}</b>
