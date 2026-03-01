@@ -71,6 +71,9 @@ export default function DashboardPage() {
   // ✅ Open All guard (prevents double click)
   const isOpeningAllRef = useRef<boolean>(false);
 
+  // ✅ NEW: Open Online guard (prevents double click)
+  const isOpeningOnlineRef = useRef<boolean>(false);
+
   const normalizeStatus = (s: string) => (s ?? "unknown").toLowerCase();
   const statusRank: Record<string, number> = { online: 0, offline: 1, unknown: 2 };
 
@@ -407,8 +410,6 @@ export default function DashboardPage() {
 
       let opened = 0;
 
-      // مهم: فتح التبويبات لازم يكون مباشرة بعد ضغط الزر.
-      // عشان كذا ما نحط await/timeout بين window.open كثير.
       for (const n of pending) {
         const w = window.open(n.streamers.channel_url, "_blank", "noopener,noreferrer");
         if (!w) {
@@ -418,7 +419,6 @@ export default function DashboardPage() {
 
         opened++;
 
-        // علّم opened عشان تختفي من pending
         await fetch("/api/auto-open/mark-opened", {
           method: "POST",
           headers: {
@@ -433,6 +433,46 @@ export default function DashboardPage() {
       await loadPending();
     } finally {
       isOpeningAllRef.current = false;
+    }
+  };
+
+  // ✅ NEW: Open ALL ONLINE Kick streamers (separate tabs)
+  const openAllOnlineNow = () => {
+    // يفتح كل Online بغض النظر عن الفلتر/البحث
+    const online = streamers
+      .filter((s) => (s.platform ?? "").toLowerCase() === "kick")
+      .filter((s) => normalizeStatus(s.last_status) === "online");
+
+    if (online.length === 0) {
+      setMsg("لا يوجد ستريمرز Online حاليا.");
+      return;
+    }
+
+    if (isOpeningOnlineRef.current) return;
+
+    const yes = confirm(`Open ALL ONLINE (${online.length}) الآن؟`);
+    if (!yes) return;
+
+    isOpeningOnlineRef.current = true;
+    try {
+      let opened = 0;
+
+      // بدون await عشان ما يمنع المتصفح التبويبات
+      for (const s of online) {
+        const w = window.open(s.channel_url, "_blank", "noopener,noreferrer");
+        if (!w) {
+          setMsg("⚠️ المتصفح منع فتح التبويبات. فعّل Pop-ups لموقع Nexus (Allow) ثم جرّب مرة ثانية.");
+          break;
+        }
+        opened++;
+      }
+
+      setMsg(`✅ تم فتح ${opened} / ${online.length} (ONLINE)`);
+    } finally {
+      // فك القفل بعد ثانية بسيطة
+      setTimeout(() => {
+        isOpeningOnlineRef.current = false;
+      }, 800);
     }
   };
 
@@ -749,10 +789,8 @@ export default function DashboardPage() {
         const token = sessionData.session?.access_token;
         if (!token) return;
 
-        // افتح فقط العناصر الجديدة اللي ما انفتحت قبل
         const toOpen = pending.filter((n) => !openedAutoRef.current.has(n.id));
 
-        // (اختياري) حد أقصى لكل دفعة عشان ما يفتح 50 تب مرة وحدة
         const MAX_OPEN_PER_BATCH = 5;
         const batch = toOpen.slice(0, MAX_OPEN_PER_BATCH);
 
@@ -766,7 +804,6 @@ export default function DashboardPage() {
 
           openedAutoRef.current.add(n.id);
 
-          // علّم الإشعار opened عشان ما يرجع pending
           await fetch("/api/auto-open/mark-opened", {
             method: "POST",
             headers: {
@@ -777,7 +814,6 @@ export default function DashboardPage() {
           });
         }
 
-        // بعد ما نفتح ونسوي mark-opened نحدث pending
         if (batch.length > 0) await loadPending();
       } finally {
         isAutoOpeningRef.current = false;
@@ -913,7 +949,6 @@ export default function DashboardPage() {
               {soundEnabled ? "🔊 Sound: ON" : "🔇 Sound: OFF"}
             </button>
 
-            {/* ✅ NEW: Open ALL (user click = allows opening all tabs) */}
             <button style={styles.btnPrimary} onClick={openAllNow} title="Open all pending streams">
               Open All
             </button>
@@ -1093,7 +1128,7 @@ export default function DashboardPage() {
           </span>
         </div>
 
-        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+        <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
           <button style={statusFilter === "all" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("all")}>
             All
           </button>
@@ -1105,6 +1140,11 @@ export default function DashboardPage() {
           </button>
           <button style={statusFilter === "unknown" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("unknown")}>
             Unknown
+          </button>
+
+          {/* ✅ NEW: Open Online */}
+          <button style={styles.btnPrimary} onClick={openAllOnlineNow} title="Open all ONLINE channels">
+            Open Online
           </button>
         </div>
 
