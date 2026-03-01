@@ -27,26 +27,8 @@ async function requireAuth(req: Request) {
   return data.user ?? null;
 }
 
-type PlanKey = "standard" | "elite" | "plus" | "pro";
-
-const PLAN_LIMITS: Record<PlanKey, number> = {
-  standard: 30,
-  elite: 100,
-  plus: 200,
-  pro: 300,
-};
-
-function resolvePlanFromSubscription(sub: any): PlanKey {
-  const status = String(sub?.status ?? "").toLowerCase();
-  const planKey = String(sub?.price_id ?? "").toLowerCase();
-
-  if (planKey === "pro" || planKey === "plus" || planKey === "elite" || planKey === "standard") {
-    const active = status === "active" || status === "trialing";
-    return active ? (planKey as PlanKey) : "standard";
-  }
-
-  const active = status === "active" || status === "trialing";
-  return active ? "elite" : "standard";
+function isAdminProfileRow(row: any) {
+  return Boolean(row?.is_admin) || String(row?.role ?? "").toLowerCase() === "admin";
 }
 
 function normalizeKickUsernameFromUrlOrInput(username: string, channelUrl: string) {
@@ -60,9 +42,7 @@ function normalizeKickUsernameFromUrlOrInput(username: string, channelUrl: strin
     // ignore
   }
 
-  // ✅ extra hardening
   finalUsername = finalUsername.replace(/^@+/, "").trim();
-
   return finalUsername.toLowerCase();
 }
 
@@ -76,6 +56,18 @@ export async function POST(req: Request) {
   if (!user) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
   const admin = supabaseAdmin();
+
+  // ✅ Admin only
+  const { data: prof, error: pErr } = await admin
+    .from("profiles")
+    .select("is_admin,role")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  if (pErr) return NextResponse.json({ ok: false, error: pErr.message }, { status: 500 });
+  if (!isAdminProfileRow(prof)) {
+    return NextResponse.json({ ok: false, error: "Forbidden (admin only)" }, { status: 403 });
+  }
 
   let body: any = {};
   try {
@@ -96,66 +88,40 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "username and channel_url are required" }, { status: 400 });
   }
 
-  // --- get plan ---
-  const { data: subRow } = await admin
-    .from("subscriptions")
-    .select("status,price_id,current_period_end")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  const plan = resolvePlanFromSubscription(subRow);
-  const limit = PLAN_LIMITS[plan];
-
-  // --- count current streamers ---
-  const { count, error: cErr } = await admin
-    .from("streamers")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", user.id)
-    .ilike("platform", "kick");
-
-  if (cErr) return NextResponse.json({ ok: false, error: cErr.message }, { status: 500 });
-
-  const current = Number(count ?? 0);
-  if (current >= limit) {
-    return NextResponse.json(
-      {
-        ok: false,
-        error: `Plan limit reached (${current}/${limit}). Upgrade to add more streamers.`,
-        plan,
-        limit,
-        current,
-      },
-      { status: 403 }
-    );
-  }
-
-  // ✅ Normalize username and force canonical URL
   const finalUsername = normalizeKickUsernameFromUrlOrInput(username, channel_url_input);
-
   if (!finalUsername) {
     return NextResponse.json({ ok: false, error: "Invalid Kick username / URL (missing channel slug)" }, { status: 400 });
   }
 
   const canonicalUrl = buildCanonicalKickUrl(finalUsername);
 
-  // --- insert ---
+  // ✅ Prevent duplicates in GLOBAL list
+  const { data: existing, error: eErr } = await admin
+    .from("streamers")
+    .select("id")
+    .eq("platform", "kick")
+    .eq("username", finalUsername)
+    .eq("is_global", true)
+    .maybeSingle();
+
+  if (eErr) return NextResponse.json({ ok: false, error: eErr.message }, { status: 500 });
+  if (existing?.id) {
+    return NextResponse.json({ ok: false, error: "Streamer already exists in global list." }, { status: 409 });
+  }
+
+  // ✅ Insert as GLOBAL
   const { error: iErr } = await admin.from("streamers").insert({
-    user_id: user.id,
+    user_id: user.id, // keep who added it (audit)
+    is_global: true,  // ⭐ مهم
     platform: "kick",
     username: finalUsername,
     display_name,
-    // ✅ store canonical (prevents duplicates like https://kick.com/)
     channel_url: canonicalUrl,
     is_enabled: true,
     last_status: "unknown",
   });
 
-  if (iErr) {
-    if ((iErr as any).code === "23505") {
-      return NextResponse.json({ ok: false, error: "Streamer already exists." }, { status: 409 });
-    }
-    return NextResponse.json({ ok: false, error: iErr.message }, { status: 500 });
-  }
+  if (iErr) return NextResponse.json({ ok: false, error: iErr.message }, { status: 500 });
 
-  return NextResponse.json({ ok: true, plan, limit, current: current + 1 });
+  return NextResponse.json({ ok: true });
 }

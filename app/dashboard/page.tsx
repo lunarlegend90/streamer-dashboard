@@ -11,6 +11,7 @@ type Streamer = {
   display_name: string | null;
   channel_url: string;
   last_status: string;
+  is_global?: boolean; // ✅ new
 };
 
 type PendingNotif = {
@@ -278,58 +279,57 @@ export default function DashboardPage() {
   };
 
   // ✅ Subscription + Approval gate: redirect non-approved → /login
-const checkSubscriptionGate = async () => {
-  const { data: u } = await supabase.auth.getUser();
-  const user = u.user;
+  const checkSubscriptionGate = async () => {
+    const { data: u } = await supabase.auth.getUser();
+    const user = u.user;
 
-  if (!user) {
-    window.location.href = "/login";
-    return false;
-  }
-
-  setEmail(user.email ?? "");
-
-  // ✅ 1) approval check
-  const { data: prof, error: pErr } = await supabase
-    .from("profiles")
-    .select("is_approved")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  if (pErr) {
-    setMsg(`⚠️ Profile check error: ${pErr.message}`);
-    // نسمح مؤقتًا بدل ما نحبسه بسبب خطأ
-  } else {
-    const approved = Boolean((prof as any)?.is_approved);
-    if (!approved) {
-      await supabase.auth.signOut();
+    if (!user) {
       window.location.href = "/login";
       return false;
     }
-  }
 
-  // ✅ 2) subscription check
-  const { data, error } = await supabase
-    .from("subscriptions")
-    .select("status,current_period_end")
-    .eq("user_id", user.id)
-    .maybeSingle();
+    setEmail(user.email ?? "");
 
-  if (error) {
-    setMsg(`⚠️ Subscription check error: ${error.message}`);
+    // ✅ 1) approval check
+    const { data: prof, error: pErr } = await supabase
+      .from("profiles")
+      .select("is_approved")
+      .eq("id", user.id)
+      .maybeSingle();
+
+    if (pErr) {
+      setMsg(`⚠️ Profile check error: ${pErr.message}`);
+    } else {
+      const approved = Boolean((prof as any)?.is_approved);
+      if (!approved) {
+        await supabase.auth.signOut();
+        window.location.href = "/login";
+        return false;
+      }
+    }
+
+    // ✅ 2) subscription check
+    const { data, error } = await supabase
+      .from("subscriptions")
+      .select("status,current_period_end")
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (error) {
+      setMsg(`⚠️ Subscription check error: ${error.message}`);
+      return true;
+    }
+
+    const row = (data as SubRow | null) ?? null;
+    const st = (row?.status ?? "inactive").toLowerCase();
+
+    if (st !== "active" && st !== "trialing") {
+      window.location.href = "/billing";
+      return false;
+    }
+
     return true;
-  }
-
-  const row = (data as SubRow | null) ?? null;
-  const st = (row?.status ?? "inactive").toLowerCase();
-
-  if (st !== "active" && st !== "trialing") {
-    window.location.href = "/billing";
-    return false;
-  }
-
-  return true;
-};
+  };
 
   // ✅ check admin (supports either is_admin OR role=admin)
   const loadIsAdmin = async () => {
@@ -359,10 +359,12 @@ const checkSubscriptionGate = async () => {
       return;
     }
 
+    // ✅ GLOBAL list only
     const { data, error } = await supabase
       .from("streamers")
-      .select("id, user_id, platform, username, display_name, channel_url, last_status")
-      .eq("user_id", me.id)
+      .select("id, user_id, platform, username, display_name, channel_url, last_status, is_global")
+      .ilike("platform", "kick")
+      .eq("is_global", true)
       .order("created_at", { ascending: false });
 
     if (error) {
@@ -526,9 +528,7 @@ const checkSubscriptionGate = async () => {
       for (let i = 0; i < wins.length; i++) {
         try {
           wins[i].location.replace(unique[i].url);
-        } catch {
-          // ignore
-        }
+        } catch {}
       }
 
       if (blocked > 0) {
@@ -541,29 +541,6 @@ const checkSubscriptionGate = async () => {
         isOpeningOnlineRef.current = false;
       }, 800);
     }
-  };
-
-  const openNow = async (n: PendingNotif) => {
-    const { data: sessionData } = await supabase.auth.getSession();
-    const token = sessionData.session?.access_token;
-
-    if (!token) {
-      setMsg("❌ لا يوجد تسجيل دخول. ارجع لصفحة login.");
-      return;
-    }
-
-    window.open(n.streamers.channel_url, "_blank", "noopener,noreferrer");
-
-    await fetch("/api/auto-open/mark-opened", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ notificationId: n.id, streamerId: n.streamer_id }),
-    });
-
-    await loadPending();
   };
 
   // ✅ Open All (Guaranteed by user click)
@@ -615,7 +592,7 @@ const checkSubscriptionGate = async () => {
     }
   };
 
-  // ✅ Admin: Fix all stored kick URLs (requires /api/admin/fix-kick-urls)
+  // ✅ Admin: Fix all stored kick URLs
   const adminFixKickUrls = async () => {
     const yes = confirm("Fix all Kick channel URLs الآن؟ (Admin only)");
     if (!yes) return;
@@ -706,10 +683,16 @@ const checkSubscriptionGate = async () => {
       setMsg(`❌ Error: ${e?.message ?? e}`);
     }
 
-    loadPending();
+    await loadPending();
+    await load(true);
   };
 
   const deleteStreamer = async (id: string) => {
+    if (!isAdmin) {
+      setMsg("❌ Admin only");
+      return;
+    }
+
     if (!confirm("حذف الستريمر؟")) return;
 
     const { error } = await supabase.from("streamers").delete().eq("id", id);
@@ -720,11 +703,16 @@ const checkSubscriptionGate = async () => {
     }
 
     setMsg("✅ تم حذف الستريمر");
-    loadPending();
+    await load(true);
   };
 
-  // ✅ Add streamer via API (enforces plan limits)
+  // ✅ Add streamer via API (ADMIN ONLY)
   const addStreamer = async () => {
+    if (!isAdmin) {
+      setMsg("❌ Admin only");
+      return;
+    }
+
     setMsg("جاري الإضافة...");
     if (!username.trim() || !channelUrl.trim()) {
       setMsg("الرجاء إدخال username و channel URL");
@@ -763,8 +751,8 @@ const checkSubscriptionGate = async () => {
     setUsername("");
     setDisplayName("");
     setChannelUrl("");
-    setMsg(`✅ تمت الإضافة (Plan: ${data.plan}, ${data.current}/${data.limit})`);
-    await loadPending();
+    setMsg("✅ تمت الإضافة");
+    await load(true);
   };
 
   const signOut = async () => {
@@ -822,7 +810,7 @@ const checkSubscriptionGate = async () => {
     setMsg("✅ تم حفظ الإعدادات");
   };
 
-  // ✅ Admin: set plan by email/uuid
+  // ✅ Admin: set plan by email/uuid (kept as-is)
   const adminSetPlan = async () => {
     const target = adminTarget.trim();
     if (!target) {
@@ -861,7 +849,7 @@ const checkSubscriptionGate = async () => {
       return;
     }
 
-    setMsg(`✅ Plan updated: ${data.user_id} → ${data.plan} (${data.status}) | limit=${data.plan_limit ?? "?"}`);
+    setMsg(`✅ Plan updated: ${data.user_id} → ${data.plan} (${data.status})`);
   };
 
   // ✅ تحديث ذكي لستريمر واحد بدل load(true)
@@ -878,7 +866,11 @@ const checkSubscriptionGate = async () => {
         display_name: newRow.display_name ?? null,
         channel_url: newRow.channel_url,
         last_status: newRow.last_status ?? "unknown",
+        is_global: newRow.is_global ?? false,
       };
+
+      // ✅ only show global
+      if (!mapped.is_global) return;
 
       setStreamers((prev) => {
         const idx = prev.findIndex((s) => s.id === mapped.id);
@@ -901,9 +893,7 @@ const checkSubscriptionGate = async () => {
       const v = localStorage.getItem("nexus_sound");
       if (v === "0") setSoundEnabled(false);
       if (v === "1") setSoundEnabled(true);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }, []);
 
   // 🔔 Update tab title + 🔊 beep on new pending
@@ -980,9 +970,6 @@ const checkSubscriptionGate = async () => {
       await loadAutoOpenSettings();
       await loadIsAdmin();
 
-      const { data: u } = await supabase.auth.getUser();
-      const me = u.user;
-
       const notifsChannel = supabase
         .channel("open_notifications_changes")
         .on("postgres_changes", { event: "*", schema: "public", table: "open_notifications" }, () => {
@@ -990,19 +977,13 @@ const checkSubscriptionGate = async () => {
         })
         .subscribe();
 
+      // ✅ IMPORTANT: no user_id filter (global list)
       const streamersChannel = supabase
         .channel("streamers_changes")
         .on(
           "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "streamers",
-            ...(me?.id ? { filter: `user_id=eq.${me.id}` } : {}),
-          } as any,
-          (payload) => {
-            applyStreamerChange(payload);
-          }
+          { event: "*", schema: "public", table: "streamers" } as any,
+          (payload) => applyStreamerChange(payload)
         )
         .subscribe();
 
@@ -1186,10 +1167,6 @@ const checkSubscriptionGate = async () => {
               ))}
             </div>
           )}
-
-          <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 10, lineHeight: 1.6 }}>
-            أي مستخدم يسوي Sign Up بيظهر هنا (Pending). اضغط Approve عشان تفعّل دخوله.
-          </div>
         </div>
       )}
 
@@ -1201,118 +1178,73 @@ const checkSubscriptionGate = async () => {
           <div style={{ display: "grid", gap: 10 }}>
             <label style={styles.label}>
               <span style={{ color: "var(--muted)", fontSize: 13 }}>Target (User ID or Email)</span>
-              <input
-                value={adminTarget}
-                onChange={(e) => setAdminTarget(e.target.value)}
-                style={styles.input}
-                placeholder="UUID أو email@example.com"
-              />
+              <input value={adminTarget} onChange={(e) => setAdminTarget(e.target.value)} style={styles.input} placeholder="UUID أو email@example.com" />
             </label>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               <label style={{ ...styles.label, flex: 1, minWidth: 180 }}>
                 <span style={{ color: "var(--muted)", fontSize: 13 }}>Plan</span>
                 <select value={adminPlan} onChange={(e) => setAdminPlan(e.target.value as any)} style={styles.select}>
-                  <option style={styles.option} value="standard">
-                    standard (30)
-                  </option>
-                  <option style={styles.option} value="elite">
-                    elite (100)
-                  </option>
-                  <option style={styles.option} value="plus">
-                    plus (200)
-                  </option>
-                  <option style={styles.option} value="pro">
-                    pro (300)
-                  </option>
+                  <option style={styles.option} value="standard">standard (30)</option>
+                  <option style={styles.option} value="elite">elite (100)</option>
+                  <option style={styles.option} value="plus">plus (200)</option>
+                  <option style={styles.option} value="pro">pro (300)</option>
                 </select>
               </label>
 
               <label style={{ ...styles.label, flex: 1, minWidth: 180 }}>
                 <span style={{ color: "var(--muted)", fontSize: 13 }}>Status</span>
                 <select value={adminStatus} onChange={(e) => setAdminStatus(e.target.value as any)} style={styles.select}>
-                  <option style={styles.option} value="active">
-                    active
-                  </option>
-                  <option style={styles.option} value="trialing">
-                    trialing
-                  </option>
-                  <option style={styles.option} value="free">
-                    free
-                  </option>
+                  <option style={styles.option} value="active">active</option>
+                  <option style={styles.option} value="trialing">trialing</option>
+                  <option style={styles.option} value="free">free</option>
                 </select>
               </label>
             </div>
 
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              <button style={styles.btnPrimary} onClick={adminSetPlan}>
-                Apply Plan
-              </button>
-
-              <button style={styles.btnSecondary} onClick={adminFixKickUrls} title="Fix Kick URLs">
-                Fix Kick URLs
-              </button>
-
-              <button
-                style={styles.btnSecondary}
-                onClick={async () => {
-                  const { data: u } = await supabase.auth.getUser();
-                  const me = u.user;
-                  if (me?.email) setAdminTarget(me.email);
-                }}
-                title="Fill my email"
-              >
-                Use My Email
-              </button>
-            </div>
-
-            <div style={{ color: "var(--muted)", fontSize: 12, lineHeight: 1.6 }}>
-              اكتب UID من Supabase Auth → Users أو اكتب Email. <br />
-              Standard مجاني (30)، Elite (100)، Plus (200)، Pro (300).
+              <button style={styles.btnPrimary} onClick={adminSetPlan}>Apply Plan</button>
+              <button style={styles.btnSecondary} onClick={adminFixKickUrls} title="Fix Kick URLs">Fix Kick URLs</button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Add Streamer */}
-      <div style={{ ...styles.card, marginTop: 16 }}>
-        <h2 style={styles.sectionTitle}>Add Streamer (Kick Only)</h2>
+      {/* Add Streamer (ADMIN ONLY) */}
+      {isAdmin && (
+        <div style={{ ...styles.card, marginTop: 16 }}>
+          <h2 style={styles.sectionTitle}>Add Streamer (Kick Only)</h2>
 
-        <div style={{ display: "grid", gap: 10 }}>
-          <label style={styles.label}>
-            <span style={{ color: "var(--muted)", fontSize: 13 }}>Platform</span>
-            <select value={platform} onChange={() => setPlatform("kick")} style={styles.select} disabled>
-              <option style={styles.option} value="kick">
-                kick
-              </option>
-            </select>
-          </label>
+          <div style={{ display: "grid", gap: 10 }}>
+            <label style={styles.label}>
+              <span style={{ color: "var(--muted)", fontSize: 13 }}>Platform</span>
+              <select value={platform} onChange={() => setPlatform("kick")} style={styles.select} disabled>
+                <option style={styles.option} value="kick">kick</option>
+              </select>
+            </label>
 
-          <label style={styles.label}>
-            <span style={{ color: "var(--muted)", fontSize: 13 }}>Username (required)</span>
-            <input value={username} onChange={(e) => setUsername(e.target.value)} style={styles.input} placeholder="مثال: nofear" />
-          </label>
+            <label style={styles.label}>
+              <span style={{ color: "var(--muted)", fontSize: 13 }}>Username (required)</span>
+              <input value={username} onChange={(e) => setUsername(e.target.value)} style={styles.input} placeholder="مثال: nofear" />
+            </label>
 
-          <label style={styles.label}>
-            <span style={{ color: "var(--muted)", fontSize: 13 }}>Display Name (optional)</span>
-            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} style={styles.input} placeholder="مثال: NOFEAR" />
-          </label>
+            <label style={styles.label}>
+              <span style={{ color: "var(--muted)", fontSize: 13 }}>Display Name (optional)</span>
+              <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} style={styles.input} placeholder="مثال: NOFEAR" />
+            </label>
 
-          <label style={styles.label}>
-            <span style={{ color: "var(--muted)", fontSize: 13 }}>Channel URL (required)</span>
-            <input value={channelUrl} onChange={(e) => setChannelUrl(e.target.value)} style={styles.input} placeholder="https://kick.com/..." />
-          </label>
+            <label style={styles.label}>
+              <span style={{ color: "var(--muted)", fontSize: 13 }}>Channel URL (required)</span>
+              <input value={channelUrl} onChange={(e) => setChannelUrl(e.target.value)} style={styles.input} placeholder="https://kick.com/..." />
+            </label>
 
-          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
-            <button style={styles.btnPrimary} onClick={addStreamer}>
-              Add
-            </button>
-            <button style={styles.btnSecondary} onClick={refreshStatus}>
-              Refresh Status
-            </button>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+              <button style={styles.btnPrimary} onClick={addStreamer}>Add</button>
+              <button style={styles.btnSecondary} onClick={refreshStatus}>Refresh Status</button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Streamers */}
       <div style={{ marginTop: 18 }}>
@@ -1321,30 +1253,16 @@ const checkSubscriptionGate = async () => {
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name/username..." style={{ ...styles.input, minWidth: 260, maxWidth: 360 }} />
 
-          <span style={styles.chip}>
-            Online: <b>{countOnline}</b>
-          </span>
-          <span style={styles.chip}>
-            Offline: <b>{countOffline}</b>
-          </span>
-          <span style={styles.chip}>
-            Unknown: <b>{countUnknown}</b>
-          </span>
+          <span style={styles.chip}>Online: <b>{countOnline}</b></span>
+          <span style={styles.chip}>Offline: <b>{countOffline}</b></span>
+          <span style={styles.chip}>Unknown: <b>{countUnknown}</b></span>
         </div>
 
         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <button style={statusFilter === "all" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("all")}>
-            All
-          </button>
-          <button style={statusFilter === "online" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("online")}>
-            Online
-          </button>
-          <button style={statusFilter === "offline" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("offline")}>
-            Offline
-          </button>
-          <button style={statusFilter === "unknown" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("unknown")}>
-            Unknown
-          </button>
+          <button style={statusFilter === "all" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("all")}>All</button>
+          <button style={statusFilter === "online" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("online")}>Online</button>
+          <button style={statusFilter === "offline" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("offline")}>Offline</button>
+          <button style={statusFilter === "unknown" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("unknown")}>Unknown</button>
 
           <button style={styles.btnPrimary} onClick={openAllOnlineNow} title="Open all ONLINE channels">
             Open Online
@@ -1383,9 +1301,12 @@ const checkSubscriptionGate = async () => {
                     >
                       Open Channel
                     </a>
-                    <button style={styles.btnDanger} onClick={() => deleteStreamer(s.id)}>
-                      Delete
-                    </button>
+
+                    {isAdmin && (
+                      <button style={styles.btnDanger} onClick={() => deleteStreamer(s.id)}>
+                        Delete
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
