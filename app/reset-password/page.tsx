@@ -8,18 +8,47 @@ export default function ResetPasswordPage() {
   const [showPass, setShowPass] = useState(false);
   const [msg, setMsg] = useState("");
   const [loading, setLoading] = useState(false);
+  const [hasSession, setHasSession] = useState(false);
 
-  // لازم تفتح الصفحة من رابط الإيميل (Supabase يحط session)
+  // ✅ Ensure session exists by exchanging "code" if present (App Router-safe)
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (!data.session) {
-        setMsg("❌ افتح رابط تغيير كلمة المرور من الإيميل أول.");
+      try {
+        const url = new URL(window.location.href);
+        const code = url.searchParams.get("code");
+
+        if (code) {
+          setMsg("جاري تفعيل جلسة إعادة تعيين كلمة المرور...");
+          const { error } = await supabase.auth.exchangeCodeForSession(code);
+          if (error) {
+            setHasSession(false);
+            setMsg(`❌ رابط التغيير غير صالح أو انتهت صلاحيته: ${error.message}`);
+            return;
+          }
+        }
+
+        const { data } = await supabase.auth.getSession();
+        const ok = Boolean(data.session);
+
+        setHasSession(ok);
+        if (!ok) {
+          setMsg("❌ افتح رابط تغيير كلمة المرور من الإيميل أول (الرابط قد يكون منتهي).");
+        } else {
+          setMsg("✅ جاهز. اكتب كلمة المرور الجديدة ثم احفظ.");
+        }
+      } catch {
+        setHasSession(false);
+        setMsg("❌ حدث خطأ أثناء تهيئة صفحة تغيير كلمة المرور.");
       }
     })();
   }, []);
 
   const update = async () => {
+    if (!hasSession) {
+      setMsg("❌ ما فيه جلسة صالحة. افتح رابط التغيير من الإيميل مرة ثانية.");
+      return;
+    }
+
     if (!password.trim()) {
       setMsg("❌ اكتب كلمة مرور جديدة");
       return;
@@ -99,12 +128,8 @@ export default function ResetPasswordPage() {
     <div style={{ padding: "0 16px" }}>
       <div style={card}>
         <div style={{ display: "grid", gap: 6, marginBottom: 10 }}>
-          <h1 style={{ margin: 0, fontSize: 28, letterSpacing: 0.3 }}>
-            Reset Password
-          </h1>
-          <div style={{ color: "var(--muted)", fontSize: 13 }}>
-            أدخل كلمة مرور جديدة لحسابك
-          </div>
+          <h1 style={{ margin: 0, fontSize: 28, letterSpacing: 0.3 }}>Reset Password</h1>
+          <div style={{ color: "var(--muted)", fontSize: 13 }}>أدخل كلمة مرور جديدة لحسابك</div>
         </div>
 
         <div style={{ display: "grid", gap: 12, marginTop: 12 }}>
@@ -119,21 +144,21 @@ export default function ResetPasswordPage() {
                 type={showPass ? "text" : "password"}
                 placeholder="********"
                 autoComplete="new-password"
-                disabled={loading}
+                disabled={loading || !hasSession}
               />
 
               <button
                 type="button"
                 onClick={() => setShowPass((v) => !v)}
                 style={btnSecondary}
-                disabled={loading}
+                disabled={loading || !hasSession}
               >
                 {showPass ? "Hide" : "Show"}
               </button>
             </div>
           </label>
 
-          <button onClick={update} style={btnPrimary} disabled={loading}>
+          <button onClick={update} style={btnPrimary} disabled={loading || !hasSession}>
             Save New Password
           </button>
 
@@ -155,7 +180,7 @@ export default function ResetPasswordPage() {
           </div>
 
           <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 6, lineHeight: 1.6 }}>
-            لازم تفتح هذه الصفحة من رابط الإيميل اللي وصلك (Reset link).
+            لازم تفتح هذه الصفحة من رابط الإيميل اللي وصلك (Reset link). إذا الرابط قديم اطلب Forgot password مرة ثانية.
           </div>
         </div>
       </div>
