@@ -436,45 +436,76 @@ export default function DashboardPage() {
     }
   };
 
-  // ✅ NEW: Open ALL ONLINE Kick streamers (separate tabs)
-  const openAllOnlineNow = () => {
-    // يفتح كل Online بغض النظر عن الفلتر/البحث
-    const online = streamers
-      .filter((s) => (s.platform ?? "").toLowerCase() === "kick")
-      .filter((s) => normalizeStatus(s.last_status) === "online");
+ // ✅ NEW: Open ALL ONLINE Kick streamers (separate tabs) - FIXED (no duplicates)
+const openAllOnlineNow = () => {
+  // اجمع online فقط
+  const online = streamers
+    .filter((s) => (s.platform ?? "").toLowerCase() === "kick")
+    .filter((s) => normalizeStatus(s.last_status) === "online");
 
-    if (online.length === 0) {
-      setMsg("لا يوجد ستريمرز Online حاليا.");
-      return;
-    }
+  if (online.length === 0) {
+    setMsg("لا يوجد ستريمرز Online حاليا.");
+    return;
+  }
 
-    if (isOpeningOnlineRef.current) return;
+  if (isOpeningOnlineRef.current) return;
 
-    const yes = confirm(`Open ALL ONLINE (${online.length}) الآن؟`);
-    if (!yes) return;
-
-    isOpeningOnlineRef.current = true;
-    try {
-      let opened = 0;
-
-      // بدون await عشان ما يمنع المتصفح التبويبات
-      for (const s of online) {
-        const w = window.open(s.channel_url, "_blank", "noopener,noreferrer");
-        if (!w) {
-          setMsg("⚠️ المتصفح منع فتح التبويبات. فعّل Pop-ups لموقع Nexus (Allow) ثم جرّب مرة ثانية.");
-          break;
-        }
-        opened++;
-      }
-
-      setMsg(`✅ تم فتح ${opened} / ${online.length} (ONLINE)`);
-    } finally {
-      // فك القفل بعد ثانية بسيطة
-      setTimeout(() => {
-        isOpeningOnlineRef.current = false;
-      }, 800);
-    }
+  // ✅ ابنِ رابط Kick من username (أضمن من channel_url لو كان مخزن غلط)
+  const buildKickUrl = (s: Streamer) => {
+    const uname = (s.username ?? "").trim().replace(/^\/+/, "");
+    if (uname) return `https://kick.com/${uname}`;
+    return (s.channel_url ?? "").trim();
   };
+
+  // ✅ Dedup by URL
+  const seen = new Set<string>();
+  const unique = online
+    .map((s) => ({ s, url: buildKickUrl(s) }))
+    .filter(({ url }) => {
+      const clean = (url ?? "").trim();
+      if (!clean) return false;
+      if (seen.has(clean)) return false;
+      seen.add(clean);
+      return true;
+    });
+
+  if (unique.length === 0) {
+    setMsg("⚠️ ما قدرت أطلع روابط صحيحة للستريمرز Online.");
+    return;
+  }
+
+  const yes = confirm(`Open ONLINE (${unique.length}) الآن؟`);
+  if (!yes) return;
+
+  isOpeningOnlineRef.current = true;
+
+  try {
+    let opened = 0;
+
+    for (const { s, url } of unique) {
+      // ✅ اسم نافذة فريد لكل ستريمر (يمنع إعادة استخدام نفس التبويب لنفس الستريمر)
+      const windowName = `nexus_${s.id}`;
+
+      const w = window.open(url, windowName, "noopener,noreferrer");
+      if (!w) {
+        setMsg("⚠️ المتصفح منع فتح التبويبات. فعّل Pop-ups لموقع Nexus (Allow) ثم جرّب مرة ثانية.");
+        break;
+      }
+      opened++;
+    }
+
+    // لو كان عندك 5 Online لكن unique أقل، معناه عندك روابط مكررة/غلط في البيانات
+    if (unique.length < online.length) {
+      setMsg(`✅ تم فتح ${opened} تبويب (تم تجاهل ${online.length - unique.length} روابط مكررة/غير صالحة).`);
+    } else {
+      setMsg(`✅ تم فتح ${opened} / ${unique.length} (ONLINE)`);
+    }
+  } finally {
+    setTimeout(() => {
+      isOpeningOnlineRef.current = false;
+    }, 800);
+  }
+};
 
   const dismissNow = async (n: PendingNotif) => {
     const { data: sessionData } = await supabase.auth.getSession();
