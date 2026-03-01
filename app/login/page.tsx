@@ -79,6 +79,30 @@ export default function LoginPage() {
       return;
     }
 
+    const resetPassword = async () => {
+  if (!email.trim()) {
+    setMsg("❌ اكتب الإيميل أول");
+    return;
+  }
+
+  setLoading(true);
+  setMsg("جاري إرسال رابط تغيير كلمة المرور...");
+
+  // لازم يكون عندك صفحة /reset-password في موقعك (بعطيك كودها بعد)
+  const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+    redirectTo: `${window.location.origin}/reset-password`,
+  });
+
+  setLoading(false);
+
+  if (error) {
+    setMsg(`❌ خطأ: ${error.message}`);
+    return;
+  }
+
+  setMsg("✅ تم إرسال رابط تغيير كلمة المرور على الإيميل");
+};
+
     persistRememberPref();
 
     setLoading(true);
