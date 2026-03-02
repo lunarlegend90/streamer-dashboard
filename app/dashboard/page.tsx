@@ -11,7 +11,7 @@ type Streamer = {
   display_name: string | null;
   channel_url: string;
   last_status: string;
-  is_global?: boolean; // ✅ new
+  is_global?: boolean;
 };
 
 type PendingNotif = {
@@ -56,8 +56,6 @@ export default function DashboardPage() {
 
   const [pending, setPending] = useState<PendingNotif[]>([]);
   const [statusFilter, setStatusFilter] = useState<"all" | "online" | "offline" | "unknown">("all");
-
-  // ✅ UI extras
   const [search, setSearch] = useState("");
 
   // Auto-open settings
@@ -72,28 +70,25 @@ export default function DashboardPage() {
   const openedAutoRef = useRef<Set<number>>(new Set());
   const isAutoOpeningRef = useRef<boolean>(false);
 
-  // ✅ Admin plan control
+  // ✅ Admin
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [adminTarget, setAdminTarget] = useState<string>(""); // email OR uuid
   const [adminPlan, setAdminPlan] = useState<"standard" | "elite" | "plus" | "pro">("standard");
   const [adminStatus, setAdminStatus] = useState<"free" | "active" | "trialing">("active");
 
-  // ✅ Admin approvals
   const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
   const [pendingUsersLoading, setPendingUsersLoading] = useState<boolean>(false);
   const approvingRef = useRef<Set<string>>(new Set());
 
-  // ✅ Open All guard (prevents double click)
+  // ✅ Open guards
   const isOpeningAllRef = useRef<boolean>(false);
-
-  // ✅ Open Online guard (prevents double click)
   const isOpeningOnlineRef = useRef<boolean>(false);
 
-  // ✅ Auto-open ONLINE after cooldown (فتح اللي ما انفتح قبل فقط)
+  // ✅ Auto-open ONLINE after cooldown (يفتح فقط اللي ما انفتح قبل)
   const lastAutoOnlineRunRef = useRef<number>(0);
   const autoOnlineTimeoutRef = useRef<any>(null);
   const autoOnlineIntervalRef = useRef<any>(null);
-  const autoOpenedOnlineRef = useRef<Set<string>>(new Set()); // ✅ key = username/url that was auto-opened
+  const autoOpenedOnlineRef = useRef<Set<string>>(new Set()); // key opened during this page session
 
   // ✅ keep latest streamers without resetting timers
   const streamersRef = useRef<Streamer[]>([]);
@@ -478,7 +473,7 @@ export default function DashboardPage() {
     }
   };
 
-  // ✅ helper: unique online kick URLs (uses latest streamers)
+  // ✅ helper: unique online kick URLs
   const getUniqueOnline = (src?: Streamer[]) => {
     const list = src ?? streamers;
 
@@ -509,7 +504,7 @@ export default function DashboardPage() {
     return unique;
   };
 
-  // ✅ keep old button: Open ONLINE manually
+  // ✅ keep old button: Open ONLINE manually (confirm)
   const openAllOnlineNow = () => {
     const unique = getUniqueOnline(streamers);
 
@@ -568,10 +563,13 @@ export default function DashboardPage() {
     isOpeningOnlineRef.current = true;
 
     try {
+      const MAX_PER_BATCH = 10; // تقدر تعدله
+      const batch = toOpen.slice(0, MAX_PER_BATCH);
+
       const wins: Window[] = [];
       let blocked = 0;
 
-      for (let i = 0; i < toOpen.length; i++) {
+      for (let i = 0; i < batch.length; i++) {
         const w = window.open("", "_blank");
         if (!w) blocked++;
         else wins.push(w);
@@ -579,17 +577,17 @@ export default function DashboardPage() {
 
       for (let i = 0; i < wins.length; i++) {
         try {
-          wins[i].location.replace(toOpen[i].url);
+          wins[i].location.replace(batch[i].url);
         } catch {}
       }
 
       // ✅ mark as opened so it won't repeat next cooldown
-      for (const x of toOpen) autoOpenedOnlineRef.current.add(x.key);
+      for (const x of batch) autoOpenedOnlineRef.current.add(x.key);
 
       if (blocked > 0) {
-        setMsg(`⚠️ Auto-Open حاول يفتح ${toOpen.length}. المتصفح منع ${blocked} تبويب. فعّل Pop-ups للموقع.`);
+        setMsg(`⚠️ Auto-Open حاول يفتح ${batch.length}. المتصفح منع ${blocked} تبويب. فعّل Pop-ups للموقع.`);
       } else {
-        setMsg(`✅ Auto-Open فتح ${wins.length}/${toOpen.length} تبويب (ONLINE)`);
+        setMsg(`✅ Auto-Open فتح ${wins.length}/${batch.length} تبويب (ONLINE)`);
       }
     } finally {
       lastAutoOnlineRunRef.current = Date.now();
@@ -599,18 +597,22 @@ export default function DashboardPage() {
     }
   };
 
-  // ✅ prune opened set when streamer goes offline (so if it يعود Online يقدر ينفتح مرة ثانية)
+  // ✅ IMPORTANT FIX: لا نمسح autoOpenedOnlineRef إلا إذا صار Offline
+  // (عشان ما يعيد فتح نفس اللي Online كل مرة)
   useEffect(() => {
     const onlineKeys = new Set(getUniqueOnline(streamers).map((x) => x.key));
     const next = new Set<string>();
+
     for (const k of autoOpenedOnlineRef.current) {
       if (onlineKeys.has(k)) next.add(k);
+      // إذا صار Offline -> ينشال تلقائياً، وإذا رجع Online لاحقاً ينفتح مرة ثانية (هذا المطلوب)
     }
+
     autoOpenedOnlineRef.current = next;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamers]);
 
-  // ✅ schedule auto-open online after cooldown and repeat (does NOT reset when streamers change)
+  // ✅ schedule auto-open online after cooldown and repeat
   useEffect(() => {
     if (autoOnlineTimeoutRef.current) clearTimeout(autoOnlineTimeoutRef.current);
     if (autoOnlineIntervalRef.current) clearInterval(autoOnlineIntervalRef.current);
@@ -680,36 +682,6 @@ export default function DashboardPage() {
     } finally {
       isOpeningAllRef.current = false;
     }
-  };
-
-  const adminFixKickUrls = async () => {
-    const yes = confirm("Fix all Kick channel URLs الآن؟ (Admin only)");
-    if (!yes) return;
-
-    setMsg("جاري إصلاح روابط Kick...");
-
-    const { data: sessionData } = await supabase.auth.getSession();
-    const token = sessionData.session?.access_token;
-
-    if (!token) {
-      setMsg("❌ لا يوجد تسجيل دخول.");
-      return;
-    }
-
-    const res = await fetch("/api/admin/fix-kick-urls", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${token}` },
-    });
-
-    const data = await res.json().catch(() => ({}));
-
-    if (!res.ok || !data.ok) {
-      setMsg(`❌ Fix error: ${data.error ?? res.status}`);
-      return;
-    }
-
-    setMsg(`✅ Fixed URLs: updated=${data.updated} | skipped=${data.skipped} | checked=${data.checked}`);
-    await load(true);
   };
 
   const dismissAll = async () => {
@@ -843,9 +815,36 @@ export default function DashboardPage() {
     await load(true);
   };
 
-  const signOut = async () => {
-    await supabase.auth.signOut();
-    window.location.href = "/login";
+  const adminFixKickUrls = async () => {
+    if (!isAdmin) return;
+
+    const yes = confirm("Fix all Kick channel URLs الآن؟ (Admin only)");
+    if (!yes) return;
+
+    setMsg("جاري إصلاح روابط Kick...");
+
+    const { data: sessionData } = await supabase.auth.getSession();
+    const token = sessionData.session?.access_token;
+
+    if (!token) {
+      setMsg("❌ لا يوجد تسجيل دخول.");
+      return;
+    }
+
+    const res = await fetch("/api/admin/fix-kick-urls", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok || !data.ok) {
+      setMsg(`❌ Fix error: ${data.error ?? res.status}`);
+      return;
+    }
+
+    setMsg(`✅ Fixed URLs: updated=${data.updated} | skipped=${data.skipped} | checked=${data.checked}`);
+    await load(true);
   };
 
   const loadAutoOpenSettings = async () => {
@@ -899,6 +898,8 @@ export default function DashboardPage() {
   };
 
   const adminSetPlan = async () => {
+    if (!isAdmin) return;
+
     const target = adminTarget.trim();
     if (!target) {
       setMsg("❌ اكتب User ID أو Email أول.");
@@ -972,6 +973,11 @@ export default function DashboardPage() {
     }
   };
 
+  const signOut = async () => {
+    await supabase.auth.signOut();
+    window.location.href = "/login";
+  };
+
   // Load sound preference once
   useEffect(() => {
     try {
@@ -991,13 +997,7 @@ export default function DashboardPage() {
     lastPendingCountRef.current = count;
   }, [pending.length, soundEnabled]);
 
-  // ✅ When isAdmin becomes true, load pending users automatically
-  useEffect(() => {
-    if (isAdmin) void loadPendingUsers();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdmin]);
-
-  // ✅ AUTO-OPEN: opens new pending automatically (requires popups allowed)
+  // ✅ AUTO-OPEN: opens new pending automatically
   useEffect(() => {
     if (!autoOpenEnabled) return;
     if (!pending.length) return;
@@ -1044,7 +1044,7 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, autoOpenEnabled]);
 
-  // ✅ Realtime: open_notifications + streamers
+  // ✅ Realtime + initial load
   useEffect(() => {
     (async () => {
       const ok = await checkSubscriptionGate();
@@ -1077,7 +1077,13 @@ export default function DashboardPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ Search + Counters + Kick only view
+  // ✅ When isAdmin becomes true, load pending users
+  useEffect(() => {
+    if (isAdmin) void loadPendingUsers();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdmin]);
+
+  // ✅ Search + Counters
   const q = search.trim().toLowerCase();
   const kickStreamers = streamers.filter((s) => (s.platform ?? "").toLowerCase() === "kick");
 
@@ -1102,6 +1108,7 @@ export default function DashboardPage() {
   const countOffline = kickStreamers.filter((s) => normalizeStatus(s.last_status) === "offline").length;
   const countUnknown = kickStreamers.filter((s) => normalizeStatus(s.last_status) === "unknown").length;
 
+  // ---------- Render ----------
   return (
     <div
       style={{
@@ -1111,6 +1118,7 @@ export default function DashboardPage() {
         fontFamily: "var(--font-geist-sans), Arial, sans-serif",
       }}
     >
+      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
         <div style={{ display: "grid", gap: 4 }}>
           <h1 style={{ margin: 0, fontSize: 34, letterSpacing: 0.5 }}>
@@ -1132,10 +1140,12 @@ export default function DashboardPage() {
         </button>
       </div>
 
+      {/* Message */}
       <div style={{ ...styles.card, marginTop: 14, padding: 12 }}>
         <div style={{ fontSize: 13, color: msg ? "var(--foreground)" : "var(--muted)" }}>{msg || "—"}</div>
       </div>
 
+      {/* Banner if pending */}
       {pending.length > 0 && (
         <div style={{ ...styles.banner, marginTop: 14 }}>
           <div style={{ display: "grid", gap: 2 }}>
@@ -1173,6 +1183,7 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* Auto-Open Settings */}
       <div style={{ ...styles.card, marginTop: 16 }}>
         <h2 style={styles.sectionTitle}>Auto-Open Settings</h2>
 
@@ -1211,11 +1222,137 @@ export default function DashboardPage() {
 
         <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 10, lineHeight: 1.6 }}>
           ✅ بعد انتهاء الـ Cooldown، النظام راح يفتح تلقائيًا <b>فقط</b> الستريمرز Online اللي ما انفتحوا قبل (بدون تكرار).
+          <br />
+          إذا صار الستريمر Offline ثم رجع Online، ينفتح مرة ثانية (هذا طبيعي).
         </div>
       </div>
 
-      {/* باقي الـ UI (Admin / Streamers list) — نفس اللي عندك */}
-      {/* ملاحظة: الزر Open Online لسه موجود ويشتغل يدوي */}
+      {/* Admin: Pending Signups */}
+      {isAdmin && (
+        <div style={{ ...styles.card, marginTop: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+            <h2 style={styles.sectionTitle}>Admin: Pending Signups</h2>
+            <button style={styles.btnSecondary} onClick={loadPendingUsers} disabled={pendingUsersLoading}>
+              {pendingUsersLoading ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+
+          {pendingUsers.length === 0 ? (
+            <div style={{ color: "var(--muted)", fontSize: 13 }}>لا يوجد طلبات جديدة.</div>
+          ) : (
+            <div style={{ display: "grid", gap: 10 }}>
+              {pendingUsers.map((u) => (
+                <div key={u.id} style={{ ...styles.card, padding: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+                    <div style={{ display: "grid", gap: 4 }}>
+                      <div style={{ fontWeight: 900 }}>
+                        {u.email ?? "(no email)"}{" "}
+                        <span style={{ color: "var(--muted)", fontWeight: 600, fontSize: 12 }}>({u.id})</span>
+                      </div>
+                      <div style={{ color: "var(--muted)", fontSize: 12 }}>
+                        Approved: <b style={{ color: "var(--foreground)" }}>{String(u.is_approved)}</b>
+                      </div>
+                    </div>
+
+                    <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                      <button
+                        style={styles.btnPrimary}
+                        onClick={() => approveUser(u.id)}
+                        disabled={approvingRef.current.has(u.id)}
+                      >
+                        {approvingRef.current.has(u.id) ? "Approving..." : "Approve"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Admin: Set Plan */}
+      {isAdmin && (
+        <div style={{ ...styles.card, marginTop: 16 }}>
+          <h2 style={styles.sectionTitle}>Admin: Set User Plan</h2>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            <label style={styles.label}>
+              <span style={{ color: "var(--muted)", fontSize: 13 }}>Target (User ID or Email)</span>
+              <input
+                value={adminTarget}
+                onChange={(e) => setAdminTarget(e.target.value)}
+                style={styles.input}
+                placeholder="UUID أو email@example.com"
+              />
+            </label>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <label style={{ ...styles.label, flex: 1, minWidth: 180 }}>
+                <span style={{ color: "var(--muted)", fontSize: 13 }}>Plan</span>
+                <select value={adminPlan} onChange={(e) => setAdminPlan(e.target.value as any)} style={styles.select}>
+                  <option style={styles.option} value="standard">standard (30)</option>
+                  <option style={styles.option} value="elite">elite (100)</option>
+                  <option style={styles.option} value="plus">plus (200)</option>
+                  <option style={styles.option} value="pro">pro (300)</option>
+                </select>
+              </label>
+
+              <label style={{ ...styles.label, flex: 1, minWidth: 180 }}>
+                <span style={{ color: "var(--muted)", fontSize: 13 }}>Status</span>
+                <select value={adminStatus} onChange={(e) => setAdminStatus(e.target.value as any)} style={styles.select}>
+                  <option style={styles.option} value="active">active</option>
+                  <option style={styles.option} value="trialing">trialing</option>
+                  <option style={styles.option} value="free">free</option>
+                </select>
+              </label>
+            </div>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <button style={styles.btnPrimary} onClick={adminSetPlan}>Apply Plan</button>
+              <button style={styles.btnSecondary} onClick={adminFixKickUrls} title="Fix Kick URLs">Fix Kick URLs</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Add Streamer (ADMIN ONLY) ✅ هذا اللي كان ناقص عندك في الصورة */}
+      {isAdmin && (
+        <div style={{ ...styles.card, marginTop: 16 }}>
+          <h2 style={styles.sectionTitle}>Add Streamer (Kick Only)</h2>
+
+          <div style={{ display: "grid", gap: 10 }}>
+            <label style={styles.label}>
+              <span style={{ color: "var(--muted)", fontSize: 13 }}>Platform</span>
+              <select value={platform} onChange={() => setPlatform("kick")} style={styles.select} disabled>
+                <option style={styles.option} value="kick">kick</option>
+              </select>
+            </label>
+
+            <label style={styles.label}>
+              <span style={{ color: "var(--muted)", fontSize: 13 }}>Username (required)</span>
+              <input value={username} onChange={(e) => setUsername(e.target.value)} style={styles.input} placeholder="مثال: nofear" />
+            </label>
+
+            <label style={styles.label}>
+              <span style={{ color: "var(--muted)", fontSize: 13 }}>Display Name (optional)</span>
+              <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} style={styles.input} placeholder="مثال: NOFEAR" />
+            </label>
+
+            <label style={styles.label}>
+              <span style={{ color: "var(--muted)", fontSize: 13 }}>Channel URL (required)</span>
+              <input value={channelUrl} onChange={(e) => setChannelUrl(e.target.value)} style={styles.input} placeholder="https://kick.com/..." />
+            </label>
+
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+              <button style={styles.btnPrimary} onClick={addStreamer}>Add</button>
+              <button style={styles.btnSecondary} onClick={refreshStatus}>Refresh Status</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Streamers */}
       <div style={{ marginTop: 18 }}>
         <h2 style={{ margin: "0 0 10px 0", fontSize: 18 }}>Streamers (Kick)</h2>
 
@@ -1226,31 +1363,19 @@ export default function DashboardPage() {
             placeholder="Search by name/username..."
             style={{ ...styles.input, minWidth: 260, maxWidth: 360 }}
           />
-          <span style={styles.chip}>
-            Online: <b>{countOnline}</b>
-          </span>
-          <span style={styles.chip}>
-            Offline: <b>{countOffline}</b>
-          </span>
-          <span style={styles.chip}>
-            Unknown: <b>{countUnknown}</b>
-          </span>
+
+          <span style={styles.chip}>Online: <b>{countOnline}</b></span>
+          <span style={styles.chip}>Offline: <b>{countOffline}</b></span>
+          <span style={styles.chip}>Unknown: <b>{countUnknown}</b></span>
         </div>
 
         <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
-          <button style={statusFilter === "all" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("all")}>
-            All
-          </button>
-          <button style={statusFilter === "online" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("online")}>
-            Online
-          </button>
-          <button style={statusFilter === "offline" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("offline")}>
-            Offline
-          </button>
-          <button style={statusFilter === "unknown" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("unknown")}>
-            Unknown
-          </button>
+          <button style={statusFilter === "all" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("all")}>All</button>
+          <button style={statusFilter === "online" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("online")}>Online</button>
+          <button style={statusFilter === "offline" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("offline")}>Offline</button>
+          <button style={statusFilter === "unknown" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("unknown")}>Unknown</button>
 
+          {/* ✅ keep old button */}
           <button style={styles.btnPrimary} onClick={openAllOnlineNow} title="Open all ONLINE channels">
             Open Online
           </button>
