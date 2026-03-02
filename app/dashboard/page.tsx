@@ -89,11 +89,16 @@ export default function DashboardPage() {
   // ✅ Open Online guard (prevents double click)
   const isOpeningOnlineRef = useRef<boolean>(false);
 
-  // ✅ NEW: Auto-open ONLINE after cooldown (no need to press button)
+  // ✅ Auto-open ONLINE after cooldown (opens ALL online each cycle)
   const lastAutoOnlineRunRef = useRef<number>(0);
-  const autoOpenedOnlineRef = useRef<Set<string>>(new Set()); // key = username/url
   const autoOnlineTimeoutRef = useRef<any>(null);
   const autoOnlineIntervalRef = useRef<any>(null);
+
+  // ✅ keep latest streamers without resetting timers
+  const streamersRef = useRef<Streamer[]>([]);
+  useEffect(() => {
+    streamersRef.current = streamers;
+  }, [streamers]);
 
   const normalizeStatus = (s: string) => (s ?? "unknown").toLowerCase();
   const statusRank: Record<string, number> = { online: 0, offline: 1, unknown: 2 };
@@ -472,9 +477,11 @@ export default function DashboardPage() {
     }
   };
 
-  // ✅ helper: unique online kick URLs
-  const getUniqueOnline = () => {
-    const online = streamers
+  // ✅ helper: unique online kick URLs (uses latest streamers)
+  const getUniqueOnline = (src?: Streamer[]) => {
+    const list = src ?? streamers;
+
+    const online = list
       .filter((s) => (s.platform ?? "").toLowerCase() === "kick")
       .filter((s) => normalizeStatus(s.last_status) === "online");
 
@@ -503,7 +510,7 @@ export default function DashboardPage() {
 
   // ✅ Open ONLINE manually (button stays)
   const openAllOnlineNow = () => {
-    const unique = getUniqueOnline();
+    const unique = getUniqueOnline(streamers);
 
     if (unique.length === 0) {
       setMsg("لا يوجد ستريمرز Online حاليا.");
@@ -545,28 +552,21 @@ export default function DashboardPage() {
     }
   };
 
-  // ✅ NEW: Auto open ONLINE after cooldown (no confirm)
+  // ✅ NEW: Auto open ALL ONLINE after cooldown (no confirm)
   const autoOpenOnlineAfterCooldown = () => {
     if (!autoOpenEnabled) return;
-    if (!streamers.length) return;
     if (isOpeningOnlineRef.current) return;
 
-    const unique = getUniqueOnline();
-
-    // لا تعيد فتح اللي انفتح تلقائياً سابقاً
-    const toOpen = unique.filter((x) => !autoOpenedOnlineRef.current.has(x.key));
-    if (toOpen.length === 0) return;
+    const unique = getUniqueOnline(streamersRef.current);
+    if (unique.length === 0) return;
 
     isOpeningOnlineRef.current = true;
 
     try {
-      const MAX_PER_BATCH = 6;
-      const batch = toOpen.slice(0, MAX_PER_BATCH);
-
       const wins: Window[] = [];
       let blocked = 0;
 
-      for (let i = 0; i < batch.length; i++) {
+      for (let i = 0; i < unique.length; i++) {
         const w = window.open("", "_blank");
         if (!w) blocked++;
         else wins.push(w);
@@ -574,16 +574,14 @@ export default function DashboardPage() {
 
       for (let i = 0; i < wins.length; i++) {
         try {
-          wins[i].location.replace(batch[i].url);
+          wins[i].location.replace(unique[i].url);
         } catch {}
       }
 
-      for (const b of batch) autoOpenedOnlineRef.current.add(b.key);
-
       if (blocked > 0) {
-        setMsg(`⚠️ Auto-Open فتح ${wins.length}/${batch.length}. المتصفح منع ${blocked} تبويب. فعّل Pop-ups للموقع.`);
+        setMsg(`⚠️ Auto-Open حاول يفتح ${unique.length}. المتصفح منع ${blocked} تبويب. فعّل Pop-ups للموقع.`);
       } else {
-        setMsg(`✅ Auto-Open فتح ${wins.length}/${batch.length} (ONLINE) بعد انتهاء الـ Cooldown`);
+        setMsg(`✅ Auto-Open فتح ${wins.length}/${unique.length} تبويب (ONLINE) بعد انتهاء الـ Cooldown`);
       }
     } finally {
       lastAutoOnlineRunRef.current = Date.now();
@@ -593,20 +591,8 @@ export default function DashboardPage() {
     }
   };
 
-  // ✅ prune autoOpenedOnlineRef when streamer goes offline (so it can re-open later)
+  // ✅ schedule auto-open online after cooldown and repeat (does NOT reset when streamers change)
   useEffect(() => {
-    const onlineKeys = new Set(getUniqueOnline().map((x) => x.key));
-    const next = new Set<string>();
-    for (const k of autoOpenedOnlineRef.current) {
-      if (onlineKeys.has(k)) next.add(k);
-    }
-    autoOpenedOnlineRef.current = next;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streamers]);
-
-  // ✅ schedule auto-open online after cooldown and repeat
-  useEffect(() => {
-    // clear old timers
     if (autoOnlineTimeoutRef.current) clearTimeout(autoOnlineTimeoutRef.current);
     if (autoOnlineIntervalRef.current) clearInterval(autoOnlineIntervalRef.current);
 
@@ -614,11 +600,9 @@ export default function DashboardPage() {
 
     const ms = Math.max(1, Number(cooldownMinutes || 1)) * 60 * 1000;
 
-    // first run after cooldown
     autoOnlineTimeoutRef.current = setTimeout(() => {
       autoOpenOnlineAfterCooldown();
 
-      // then repeat every cooldown
       autoOnlineIntervalRef.current = setInterval(() => {
         autoOpenOnlineAfterCooldown();
       }, ms);
@@ -629,7 +613,7 @@ export default function DashboardPage() {
       if (autoOnlineIntervalRef.current) clearInterval(autoOnlineIntervalRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [autoOpenEnabled, cooldownMinutes, streamers]);
+  }, [autoOpenEnabled, cooldownMinutes]);
 
   const openAllNow = async () => {
     if (pending.length === 0) {
@@ -1196,7 +1180,7 @@ export default function DashboardPage() {
         </div>
 
         <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 10, lineHeight: 1.6 }}>
-          ✅ بعد انتهاء الـ Cooldown، النظام راح يحاول يفتح تلقائيًا كل الستريمرز اللي Online (إذا Pop-ups مسموحة).
+          ✅ بعد انتهاء الـ Cooldown، النظام راح يحاول يفتح تلقائيًا <b>كل</b> الستريمرز اللي Online (إذا Pop-ups مسموحة).
         </div>
       </div>
 
