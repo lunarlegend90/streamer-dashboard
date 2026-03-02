@@ -89,6 +89,12 @@ export default function DashboardPage() {
   // ✅ Open Online guard (prevents double click)
   const isOpeningOnlineRef = useRef<boolean>(false);
 
+  // ✅ NEW: Auto-open ONLINE after cooldown (no need to press button)
+  const lastAutoOnlineRunRef = useRef<number>(0);
+  const autoOpenedOnlineRef = useRef<Set<string>>(new Set()); // key = username/url
+  const autoOnlineTimeoutRef = useRef<any>(null);
+  const autoOnlineIntervalRef = useRef<any>(null);
+
   const normalizeStatus = (s: string) => (s ?? "unknown").toLowerCase();
   const statusRank: Record<string, number> = { online: 0, offline: 1, unknown: 2 };
 
@@ -120,7 +126,6 @@ export default function DashboardPage() {
       padding: "10px 12px",
     };
 
-    // ✅ Dark select + dark options (prevents white dropdown)
     const select: React.CSSProperties = {
       ...input,
       appearance: "none",
@@ -255,7 +260,6 @@ export default function DashboardPage() {
     );
   };
 
-  // 🔊 small beep (no external files)
   const beep = async () => {
     try {
       const AudioCtx = (window as any).AudioContext || (window as any).webkitAudioContext;
@@ -273,12 +277,10 @@ export default function DashboardPage() {
         o.stop();
         ctx.close();
       }, 180);
-    } catch {
-      // ignore
-    }
+    } catch {}
   };
 
-  // ✅ Subscription + Approval gate: redirect non-approved → /login
+  // ✅ Subscription + Approval gate
   const checkSubscriptionGate = async () => {
     const { data: u } = await supabase.auth.getUser();
     const user = u.user;
@@ -290,7 +292,6 @@ export default function DashboardPage() {
 
     setEmail(user.email ?? "");
 
-    // ✅ 1) approval check
     const { data: prof, error: pErr } = await supabase
       .from("profiles")
       .select("is_approved")
@@ -308,7 +309,6 @@ export default function DashboardPage() {
       }
     }
 
-    // ✅ 2) subscription check
     const { data, error } = await supabase
       .from("subscriptions")
       .select("status,current_period_end")
@@ -331,7 +331,6 @@ export default function DashboardPage() {
     return true;
   };
 
-  // ✅ check admin (supports either is_admin OR role=admin)
   const loadIsAdmin = async () => {
     const { data: u } = await supabase.auth.getUser();
     const user = u.user;
@@ -345,7 +344,6 @@ export default function DashboardPage() {
     setIsAdmin(admin);
   };
 
-  // ---------- Data ----------
   const load = async (silent = false) => {
     if (!silent) setMsg("جاري تحميل البيانات...");
 
@@ -359,7 +357,6 @@ export default function DashboardPage() {
       return;
     }
 
-    // ✅ GLOBAL list only
     const { data, error } = await supabase
       .from("streamers")
       .select("id, user_id, platform, username, display_name, channel_url, last_status, is_global")
@@ -400,7 +397,6 @@ export default function DashboardPage() {
     setPending(data.items ?? []);
   };
 
-  // ✅ Admin: load pending users
   const loadPendingUsers = async () => {
     if (!isAdmin) return;
 
@@ -433,7 +429,6 @@ export default function DashboardPage() {
     }
   };
 
-  // ✅ Admin: approve one user
   const approveUser = async (userId: string) => {
     if (!isAdmin) return;
     if (!userId) return;
@@ -477,38 +472,45 @@ export default function DashboardPage() {
     }
   };
 
-  // ✅ Open ALL ONLINE Kick streamers (separate tabs)
-  const openAllOnlineNow = () => {
+  // ✅ helper: unique online kick URLs
+  const getUniqueOnline = () => {
     const online = streamers
       .filter((s) => (s.platform ?? "").toLowerCase() === "kick")
       .filter((s) => normalizeStatus(s.last_status) === "online");
 
-    if (online.length === 0) {
+    const seen = new Set<string>();
+    const unique: { key: string; url: string }[] = [];
+
+    for (const s of online) {
+      const uname = String(s.username ?? "")
+        .trim()
+        .replace(/^@+/, "")
+        .replace(/^\/+/, "")
+        .toLowerCase();
+
+      const url = uname ? `https://kick.com/${uname}` : String(s.channel_url ?? "").trim();
+      const key = uname || url;
+
+      if (!key || !url) continue;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      unique.push({ key, url });
+    }
+
+    return unique;
+  };
+
+  // ✅ Open ONLINE manually (button stays)
+  const openAllOnlineNow = () => {
+    const unique = getUniqueOnline();
+
+    if (unique.length === 0) {
       setMsg("لا يوجد ستريمرز Online حاليا.");
       return;
     }
 
     if (isOpeningOnlineRef.current) return;
-
-    const seen = new Set<string>();
-    const unique = online
-      .map((s) => {
-        const uname = String(s.username ?? "")
-          .trim()
-          .replace(/^@+/, "")
-          .replace(/^\/+/, "")
-          .toLowerCase();
-
-        const url = uname ? `https://kick.com/${uname}` : String(s.channel_url ?? "").trim();
-        return { uname, url };
-      })
-      .filter(({ uname, url }) => {
-        const key = uname || url;
-        if (!key) return false;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      });
 
     const yes = confirm(`Open ONLINE (${unique.length}) الآن؟`);
     if (!yes) return;
@@ -543,7 +545,92 @@ export default function DashboardPage() {
     }
   };
 
-  // ✅ Open All (Guaranteed by user click)
+  // ✅ NEW: Auto open ONLINE after cooldown (no confirm)
+  const autoOpenOnlineAfterCooldown = () => {
+    if (!autoOpenEnabled) return;
+    if (!streamers.length) return;
+    if (isOpeningOnlineRef.current) return;
+
+    const unique = getUniqueOnline();
+
+    // لا تعيد فتح اللي انفتح تلقائياً سابقاً
+    const toOpen = unique.filter((x) => !autoOpenedOnlineRef.current.has(x.key));
+    if (toOpen.length === 0) return;
+
+    isOpeningOnlineRef.current = true;
+
+    try {
+      const MAX_PER_BATCH = 6;
+      const batch = toOpen.slice(0, MAX_PER_BATCH);
+
+      const wins: Window[] = [];
+      let blocked = 0;
+
+      for (let i = 0; i < batch.length; i++) {
+        const w = window.open("", "_blank");
+        if (!w) blocked++;
+        else wins.push(w);
+      }
+
+      for (let i = 0; i < wins.length; i++) {
+        try {
+          wins[i].location.replace(batch[i].url);
+        } catch {}
+      }
+
+      for (const b of batch) autoOpenedOnlineRef.current.add(b.key);
+
+      if (blocked > 0) {
+        setMsg(`⚠️ Auto-Open فتح ${wins.length}/${batch.length}. المتصفح منع ${blocked} تبويب. فعّل Pop-ups للموقع.`);
+      } else {
+        setMsg(`✅ Auto-Open فتح ${wins.length}/${batch.length} (ONLINE) بعد انتهاء الـ Cooldown`);
+      }
+    } finally {
+      lastAutoOnlineRunRef.current = Date.now();
+      setTimeout(() => {
+        isOpeningOnlineRef.current = false;
+      }, 800);
+    }
+  };
+
+  // ✅ prune autoOpenedOnlineRef when streamer goes offline (so it can re-open later)
+  useEffect(() => {
+    const onlineKeys = new Set(getUniqueOnline().map((x) => x.key));
+    const next = new Set<string>();
+    for (const k of autoOpenedOnlineRef.current) {
+      if (onlineKeys.has(k)) next.add(k);
+    }
+    autoOpenedOnlineRef.current = next;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [streamers]);
+
+  // ✅ schedule auto-open online after cooldown and repeat
+  useEffect(() => {
+    // clear old timers
+    if (autoOnlineTimeoutRef.current) clearTimeout(autoOnlineTimeoutRef.current);
+    if (autoOnlineIntervalRef.current) clearInterval(autoOnlineIntervalRef.current);
+
+    if (!autoOpenEnabled) return;
+
+    const ms = Math.max(1, Number(cooldownMinutes || 1)) * 60 * 1000;
+
+    // first run after cooldown
+    autoOnlineTimeoutRef.current = setTimeout(() => {
+      autoOpenOnlineAfterCooldown();
+
+      // then repeat every cooldown
+      autoOnlineIntervalRef.current = setInterval(() => {
+        autoOpenOnlineAfterCooldown();
+      }, ms);
+    }, ms);
+
+    return () => {
+      if (autoOnlineTimeoutRef.current) clearTimeout(autoOnlineTimeoutRef.current);
+      if (autoOnlineIntervalRef.current) clearInterval(autoOnlineIntervalRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoOpenEnabled, cooldownMinutes, streamers]);
+
   const openAllNow = async () => {
     if (pending.length === 0) {
       setMsg("لا يوجد تنبيهات حاليا.");
@@ -592,7 +679,6 @@ export default function DashboardPage() {
     }
   };
 
-  // ✅ Admin: Fix all stored kick URLs
   const adminFixKickUrls = async () => {
     const yes = confirm("Fix all Kick channel URLs الآن؟ (Admin only)");
     if (!yes) return;
@@ -706,7 +792,6 @@ export default function DashboardPage() {
     await load(true);
   };
 
-  // ✅ Add streamer via API (ADMIN ONLY)
   const addStreamer = async () => {
     if (!isAdmin) {
       setMsg("❌ Admin only");
@@ -810,7 +895,6 @@ export default function DashboardPage() {
     setMsg("✅ تم حفظ الإعدادات");
   };
 
-  // ✅ Admin: set plan by email/uuid (kept as-is)
   const adminSetPlan = async () => {
     const target = adminTarget.trim();
     if (!target) {
@@ -852,7 +936,6 @@ export default function DashboardPage() {
     setMsg(`✅ Plan updated: ${data.user_id} → ${data.plan} (${data.status})`);
   };
 
-  // ✅ تحديث ذكي لستريمر واحد بدل load(true)
   const applyStreamerChange = (payload: any) => {
     const newRow = payload?.new as any;
     const oldRow = payload?.old as any;
@@ -869,7 +952,6 @@ export default function DashboardPage() {
         is_global: newRow.is_global ?? false,
       };
 
-      // ✅ only show global
       if (!mapped.is_global) return;
 
       setStreamers((prev) => {
@@ -977,14 +1059,9 @@ export default function DashboardPage() {
         })
         .subscribe();
 
-      // ✅ IMPORTANT: no user_id filter (global list)
       const streamersChannel = supabase
         .channel("streamers_changes")
-        .on(
-          "postgres_changes",
-          { event: "*", schema: "public", table: "streamers" } as any,
-          (payload) => applyStreamerChange(payload)
-        )
+        .on("postgres_changes", { event: "*", schema: "public", table: "streamers" } as any, (payload) => applyStreamerChange(payload))
         .subscribe();
 
       return () => {
@@ -1020,10 +1097,8 @@ export default function DashboardPage() {
   const countOffline = kickStreamers.filter((s) => normalizeStatus(s.last_status) === "offline").length;
   const countUnknown = kickStreamers.filter((s) => normalizeStatus(s.last_status) === "unknown").length;
 
-  // ---------- Render ----------
   return (
     <div style={{ maxWidth: 980, margin: "40px auto", padding: "0 16px", fontFamily: "var(--font-geist-sans), Arial, sans-serif" }}>
-      {/* Header */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
         <div style={{ display: "grid", gap: 4 }}>
           <h1 style={{ margin: 0, fontSize: 34, letterSpacing: 0.5 }}>
@@ -1045,21 +1120,17 @@ export default function DashboardPage() {
         </button>
       </div>
 
-      {/* Message */}
       <div style={{ ...styles.card, marginTop: 14, padding: 12 }}>
         <div style={{ fontSize: 13, color: msg ? "var(--foreground)" : "var(--muted)" }}>{msg || "—"}</div>
       </div>
 
-      {/* Banner if pending */}
       {pending.length > 0 && (
         <div style={{ ...styles.banner, marginTop: 14 }}>
           <div style={{ display: "grid", gap: 2 }}>
             <div style={{ fontWeight: 900 }}>
               🔔 New live streams: <span style={{ color: "var(--foreground)" }}>{pending.length}</span>
             </div>
-            <div style={{ color: "var(--muted)", fontSize: 12 }}>
-              إذا Auto-Open ON و Pop-ups مسموحة، راح ينفتح تلقائيًا.
-            </div>
+            <div style={{ color: "var(--muted)", fontSize: 12 }}>إذا Auto-Open ON و Pop-ups مسموحة، راح ينفتح تلقائيًا.</div>
           </div>
 
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -1088,7 +1159,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Auto-Open Settings */}
       <div style={{ ...styles.card, marginTop: 16 }}>
         <h2 style={styles.sectionTitle}>Auto-Open Settings</h2>
 
@@ -1124,9 +1194,12 @@ export default function DashboardPage() {
             Refresh Status
           </button>
         </div>
+
+        <div style={{ color: "var(--muted)", fontSize: 12, marginTop: 10, lineHeight: 1.6 }}>
+          ✅ بعد انتهاء الـ Cooldown، النظام راح يحاول يفتح تلقائيًا كل الستريمرز اللي Online (إذا Pop-ups مسموحة).
+        </div>
       </div>
 
-      {/* Admin: Pending Signups */}
       {isAdmin && (
         <div style={{ ...styles.card, marginTop: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
@@ -1154,11 +1227,7 @@ export default function DashboardPage() {
                     </div>
 
                     <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                      <button
-                        style={styles.btnPrimary}
-                        onClick={() => approveUser(u.id)}
-                        disabled={approvingRef.current.has(u.id)}
-                      >
+                      <button style={styles.btnPrimary} onClick={() => approveUser(u.id)} disabled={approvingRef.current.has(u.id)}>
                         {approvingRef.current.has(u.id) ? "Approving..." : "Approve"}
                       </button>
                     </div>
@@ -1170,7 +1239,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Admin Card */}
       {isAdmin && (
         <div style={{ ...styles.card, marginTop: 16 }}>
           <h2 style={styles.sectionTitle}>Admin: Set User Plan</h2>
@@ -1210,7 +1278,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Add Streamer (ADMIN ONLY) */}
       {isAdmin && (
         <div style={{ ...styles.card, marginTop: 16 }}>
           <h2 style={styles.sectionTitle}>Add Streamer (Kick Only)</h2>
@@ -1246,13 +1313,11 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Streamers */}
       <div style={{ marginTop: 18 }}>
         <h2 style={{ margin: "0 0 10px 0", fontSize: 18 }}>Streamers (Kick)</h2>
 
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name/username..." style={{ ...styles.input, minWidth: 260, maxWidth: 360 }} />
-
           <span style={styles.chip}>Online: <b>{countOnline}</b></span>
           <span style={styles.chip}>Offline: <b>{countOffline}</b></span>
           <span style={styles.chip}>Unknown: <b>{countUnknown}</b></span>
@@ -1264,6 +1329,7 @@ export default function DashboardPage() {
           <button style={statusFilter === "offline" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("offline")}>Offline</button>
           <button style={statusFilter === "unknown" ? styles.btnPrimary : styles.btnSecondary} onClick={() => setStatusFilter("unknown")}>Unknown</button>
 
+          {/* ✅ keep old button */}
           <button style={styles.btnPrimary} onClick={openAllOnlineNow} title="Open all ONLINE channels">
             Open Online
           </button>
